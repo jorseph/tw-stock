@@ -102,8 +102,12 @@ async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("歡迎使用股票查詢機器人！請輸入 /stock <股票代號> 或 /recommend")
 
 def main():
-    TOKEN = ""  # 請替換為你的 Telegram Bot Token
-    app = Application.builder().token(TOKEN).build()
+    # 讀取 Heroku 環境變數
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+    if not BOT_TOKEN:
+        raise ValueError("未找到 BOT_TOKEN，請在 Heroku 環境變數設定 BOT_TOKEN")
+    app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stock", stock))
