@@ -84,7 +84,7 @@ async def recommend(update: Update, context: CallbackContext) -> None:
         (df["平均淨利(%)"] > 10.0) & 
         (df["平均ROE(%)"] > 10) &  # ROE 超過10%
         (df["營收成長(%)"].abs() < 10) &  # 營收波動不超過10%
-        (df["平均ROE增減"] > 0)  # 平均ROE增減 > 0
+        (df["平均ROE增減"] > 0) &  # 平均ROE增減 > 0
         (df["平均毛利(%)"] > 30)  # 毛利率 > 30%
     ].sort_values(by="平均財報評分", ascending=False).head(count)
 
