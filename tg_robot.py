@@ -84,10 +84,11 @@ async def recommend(update: Update, context: CallbackContext) -> None:
         (df["平均淨利(%)"] > 10.0) & 
         (df["平均ROE(%)"] > 10) &  # ROE 超過10%
         (df["營收成長(%)"].abs() < 10) &  # 營收波動不超過10%
+        (df["平均ROE增減"] > 0)  # 平均ROE增減 > 0
         (df["平均毛利(%)"] > 30)  # 毛利率 > 30%
     ].sort_values(by="平均財報評分", ascending=False).head(count)
 
-    message = "📢 **推薦股票前 {count} 名（依平均財報評分）**\n"
+    message = f"📢 **推薦股票前 {count} 名（依平均財報評分）**\n"
     for _, stock in top_stocks.iterrows():
         message += (
             f"🔹 **{stock['名稱']} ({stock['代號']})**\n"
