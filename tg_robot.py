@@ -102,7 +102,7 @@ async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("歡迎使用股票查詢機器人！請輸入 /stock <股票代號> 或 /recommend")
 
 def main():
-    TOKEN = "7666541579:AAFYfGARY8N1batgg07rXtBODygevBwKY2c"  # 請替換為你的 Telegram Bot Token
+    TOKEN = ""  # 請替換為你的 Telegram Bot Token
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
