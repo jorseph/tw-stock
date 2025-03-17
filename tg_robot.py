@@ -297,6 +297,7 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
     print(df_quarterly.tail())
 
     # 🔹 **計算 BVPS**
+    df_quarterly["prev_close"] = get_current_stock_price(stock_id)
     df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
 
     # 🔹 **計算推估股價**
