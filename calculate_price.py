@@ -1,7 +1,7 @@
 import pandas as pd
 
 # 讀取合併後的 CSV 檔案
-file_path = "./Merged_Inner.csv"
+file_path = "Merged_Inner.csv"
 df = pd.read_csv(file_path)
 
 # 移除 "排名" 欄位（如果存在）
@@ -37,7 +37,7 @@ df["平均合理股價"] = (df["計算EPS"] * df["平均PER"]).round(2)
 df["最高合理股價"] = (df["計算EPS"] * df["平均最高PER"]).round(2)
 
 # 儲存結果
-output_path = "./Calculated_Stock_Values.csv"
+output_path = "tw-stock//Calculated_Stock_Values.csv"
 df.to_csv(output_path, index=False)
 
 # 顯示前 10 筆數據

@@ -1,20 +1,43 @@
 import pandas as pd
 import logging
 import os
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 # 設定日誌
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# 載入 CSV 檔案
-CSV_FILE = "Calculated_Stock_Values.csv"  # 確保檔案路徑正確
+print("當前工作目錄:", os.getcwd())
+
+import pandas as pd
+from telegram import Update
+from telegram.ext import CallbackContext
+
+load_dotenv()
+FINMIND_API_KEY = os.getenv("FINMIND_API_KEY")
+FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
+
+# 讀取股票基本資訊 CSV
+CSV_FILE = "Calculated_Stock_Values.csv"
 df = pd.read_csv(CSV_FILE)
 
-# 處理代號為字符串，避免數據類型問題
+# 確保 "代號" 欄位為字串
 df["代號"] = df["代號"].astype(str)
 
-# 查詢股票資訊
+# 讀取配息資訊 CSV
+DIVIDEND_CSV_FILE = "all_stock_dividends.csv"
+df_dividend = pd.read_csv(DIVIDEND_CSV_FILE)
+
+# 確保 "stock_id" 欄位為字串
+df_dividend["stock_id"] = df_dividend["stock_id"].astype(str)
+
+# 確保 "CashEarningsDistribution" 欄位是數值類型（避免 NaN 問題）
+df_dividend["CashEarningsDistribution"] = pd.to_numeric(df_dividend["CashEarningsDistribution"], errors='coerce')
+
+# 處理查詢指令
 async def stock(update: Update, context: CallbackContext) -> None:
     if not context.args:
         await update.message.reply_text("請輸入股票代號，例如：/stock 3008")
@@ -27,7 +50,9 @@ async def stock(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(f"找不到股票代號 {stock_id} 的資訊")
         return
 
-    info = stock_info.iloc[0]  # 取得第一筆資料
+    info = stock_info.iloc[0]  # 取得第一筆股票資訊
+
+    # 🔹 回應訊息
     message = (
         f"📊 **股票資訊 - {info['名稱']} ({stock_id})**\n"
         f"🔹 **成交價**: {info['成交']} 元\n"
@@ -42,6 +67,7 @@ async def stock(update: Update, context: CallbackContext) -> None:
     )
 
     await update.message.reply_text(message, parse_mode="Markdown")
+
 
 # 推薦前 15 筆股票（根據平均財報評分排序）
 async def recommend(update: Update, context: CallbackContext) -> None:
@@ -85,7 +111,8 @@ async def recommend(update: Update, context: CallbackContext) -> None:
         (df["平均ROE(%)"] > 10) &  # ROE 超過10%
         (df["營收成長(%)"].abs() < 10) &  # 營收波動不超過10%
         (df["平均ROE增減"] > 0) &  # 平均ROE增減 > 0
-        (df["平均毛利(%)"] > 30)  # 毛利率 > 30%
+        (df["平均毛利(%)"] > 30) &  # 毛利率 > 30%
+        (df["統計年數_x"] > 5)  # 淨利率 > 10%
     ].sort_values(by="平均財報評分", ascending=False).head(count)
 
     message = f"📢 **推薦股票前 {count} 名（依平均財報評分）**\n"
@@ -103,7 +130,180 @@ async def recommend(update: Update, context: CallbackContext) -> None:
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("歡迎使用股票查詢機器人！請輸入 /stock <股票代號> 或 /recommend")
 
+
+# Telegram Bot 指令：/stock_estimate 2330
+async def stock_estimate(update: Update, context: CallbackContext) -> None:
+    if not context.args:
+        await update.message.reply_text("請輸入股票代號，例如：/stock_estimate 2330")
+        return
+
+    stock_id = context.args[0]
+    df_result = calculate_quarterly_stock_estimates(stock_id)
+
+    if df_result is None:
+        await update.message.reply_text(f"⚠️ 無法獲取 {stock_id} 的數據，請檢查 API 設定或股票代號")
+        return
+
+    # 取最近 4 季數據
+    df_result = df_result.tail(4)
+
+    # 生成回應訊息
+    message = f"📊 **{stock_id} 季度 ROE & 推估股價** 📊\n"
+    for _, row in df_result.iterrows():
+        message += (
+            f"\n📅 **季度**: {row['quarter']}"
+            f"\n📊 **ROE**: {row['ROE']:.2f}%"
+            f"\n🏦 **BVPS**: {row['BVPS']:.2f} 元"
+            f"\n💰 **推估股價**: {row['推估股價']:.2f} 元\n"
+            "--------------------"
+        )
+
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
+async def etf(update: Update, context: CallbackContext) -> None:
+    if not context.args:
+        await update.message.reply_text("請輸入 ETF 代號，例如：/etf 00713")
+        return
+    
+    # 🔹 查詢當前股價
+    stock_id = context.args[0]
+    current_price = get_current_stock_price(stock_id)
+
+    if current_price is None:
+        await update.message.reply_text(f"無法獲取 {stock_id} 的最新股價，請稍後再試")
+        return
+
+    # 🔹 計算最近一年配息總額 & 殖利率
+    total_dividends, dividend_yield = calculate_dividend_yield(stock_id, current_price)
+
+    # 🔹 回應訊息
+    message = (
+        f"📊 **ETF 資訊 - {stock_id}**\n"
+        f"🔹 **當前股價**: {current_price:.2f} 元\n"
+        f"💸 **最近一年配息總額**: {total_dividends:.2f} 元 💰\n"
+        f"📊 **殖利率**: {dividend_yield:.2f}%\n"
+    )
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
+# 🔹 查詢最近的交易日股價
+def get_current_stock_price(stock_id):
+    # 設定最大回溯天數，避免過度請求 API
+    max_days = 5  
+    check_date = datetime.today() - timedelta(days=1)  # 預設查詢前一天
+
+    for _ in range(max_days):
+        # 格式化日期
+        start_date = check_date.strftime('%Y-%m-%d')
+
+        parameter = {
+            "dataset": "TaiwanStockPrice",
+            "data_id": stock_id,
+            "start_date": start_date,
+            "token": FINMIND_API_KEY,
+        }
+
+        response = requests.get(FINMIND_URL, params=parameter)
+        data = response.json()
+
+        # 檢查 API 回應是否有數據
+        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+            df_price = pd.DataFrame(data["data"])
+            latest_price = df_price.sort_values(by="date", ascending=False).iloc[0]["close"]
+            return latest_price  # 找到最近的股價後返回
+
+        # 如果沒有數據，向前推一天（避免週六日查不到）
+        check_date -= timedelta(days=1)
+
+    return None  # 若 5 天內都查不到股價則回傳 None
+    
+
+def calculate_dividend_yield(stock_id, current_price):
+    """ 計算該 ETF 或股票的最近一年度配息總額，並計算殖利率 """
+    
+    # 過濾特定股票
+    stock_dividends = df_dividend[(df_dividend["stock_id"] == stock_id) & (df_dividend["CashEarningsDistribution"] > 0)].copy()
+
+    # 確保 date 欄位是 datetime 格式
+    stock_dividends["date"] = pd.to_datetime(stock_dividends["date"], errors="coerce")
+
+    if stock_dividends.empty:
+        return 0.0, 0.0  # 如果該股票無配息資料，則回傳 0
+
+    # 🔹 取得最近一年的配息
+    one_year_ago = datetime.today() - timedelta(days=365)
+    
+    # **這行錯誤的比較改為確保 date 欄位是 datetime**
+    last_year_dividends = stock_dividends[stock_dividends["date"] >= one_year_ago]
+
+    # 計算年度配息總額
+    total_dividends = last_year_dividends["CashEarningsDistribution"].sum()
+
+    # 計算殖利率
+    if current_price > 0:
+        dividend_yield = (total_dividends / current_price) * 100
+    else:
+        dividend_yield = 0.0
+
+    return total_dividends, dividend_yield
+
+
+# 計算季度 ROE & 推估股價
+def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_date="2025-12-31"):
+    """ 透過 FinMind API 取得 PBR、PER，計算季度 ROE、BVPS、推估股價 """
+    parameter = {
+        "dataset": "TaiwanStockPER",
+        "data_id": stock_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "token": FINMIND_API_KEY,
+    }
+
+    response = requests.get(FINMIND_URL, params=parameter)
+    data = response.json()
+
+    if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
+        return None
+
+    df = pd.DataFrame(data["data"])
+
+    # 確保數據格式
+    df["date"] = pd.to_datetime(df["date"])
+    df["PBR"] = pd.to_numeric(df["PBR"], errors="coerce")
+    df["PER"] = pd.to_numeric(df["PER"], errors="coerce")
+
+    print("\n📌 **數據轉換後 (日期轉換 & 數值處理後)**")
+    print(df.tail())
+
+    # 計算 ROE (%)
+    df["ROE"] = (df["PBR"] / df["PER"]) * 100
+
+
+    # 依季度取數據
+    df["quarter"] = df["date"].dt.to_period("Q")
+    df_quarterly = df.groupby("quarter").last().reset_index()
+    print("\n📌 **季度數據 (每季最後一天的數據)**")
+    print(df_quarterly.tail())
+
+    # 計算 BVPS（使用前一天股價反推）
+    df_quarterly["prev_close"] = get_current_stock_price(stock_id)
+    df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
+    print("\n📌 **計算 BVPS 之後**")
+    print(df_quarterly[["quarter", "stock_id", "prev_close", "PBR", "BVPS"]].tail())
+
+    # 計算推估股價
+    df_quarterly["推估股價"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"] * df_quarterly["PER"]
+    print("\n📌 **計算推估股價 之後**")
+    print(df_quarterly[["quarter", "stock_id", "ROE", "BVPS", "PER", "推估股價"]].tail())
+
+    return df_quarterly
+
+
 def main():
+    load_dotenv()  # 載入 .env 變數
+    
     # 讀取 Heroku 環境變數
     BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -114,6 +314,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stock", stock))
     app.add_handler(CommandHandler("recommend", recommend))
+    app.add_handler(CommandHandler("etf", etf))
+    app.add_handler(CommandHandler("stock_estimate", stock_estimate))
 
     app.run_polling()
 
