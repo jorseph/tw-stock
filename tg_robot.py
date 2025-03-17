@@ -154,7 +154,9 @@ async def stock_estimate(update: Update, context: CallbackContext) -> None:
             f"\n📅 **季度**: {row['quarter']}"
             f"\n📊 **ROE**: {row['ROE']:.2f}%"
             f"\n🏦 **BVPS**: {row['BVPS']:.2f} 元"
-            f"\n💰 **推估股價**: {row['推估股價']:.2f} 元\n"
+            f"\n💰 **推估EPS**: {row['推估EPS']:.2f} 元\n"
+            f"\n💰 **正常股價**: {row['正常股價']:.2f} 元\n"
+            f"\n💰 **低股價**: {row['低股價']:.2f} 元\n"
             "--------------------"
         )
 
@@ -301,16 +303,16 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
     df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
 
     # 🔹 **計算推估股價**
-    df_quarterly["推估股價"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"] * df_quarterly["PER"]
+    df_quarterly["推估EPS"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"]
 
     # 🔹 **計算正常股價（PER 平均值 × BVPS）**
-    df_quarterly["正常股價"] = df_quarterly["PER_平均值"] * df_quarterly["BVPS"]
+    df_quarterly["正常股價"] = df_quarterly["PER_平均值"] * df_quarterly["推估EPS"]
 
     # 🔹 **計算低股價（PER 最低值 × BVPS）**
-    df_quarterly["低股價"] = df_quarterly["PER_最低值"] * df_quarterly["BVPS"]
+    df_quarterly["低股價"] = df_quarterly["PER_最低值"] * df_quarterly["推估EPS"]
 
     print("\n📌 **計算推估股價 之後**")
-    print(df_quarterly[["quarter", "stock_id", "ROE", "BVPS", "PER", "推估股價", "正常股價", "低股價"]].tail())
+    print(df_quarterly[["quarter", "stock_id", "ROE", "BVPS", "PER", "推估EPS", "正常股價", "低股價"]].tail())
 
     return df_quarterly
 
