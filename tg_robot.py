@@ -178,7 +178,7 @@ async def etf(update: Update, context: CallbackContext) -> None:
 
     # 🔹 計算最近一年配息總額 & 殖利率
     # total_dividends, dividend_yield = calculate_dividend_yield(stock_id, current_price)
-    total_dividends, dividend_yield = calculate_all_dividend_yield(stock_id)
+    total_dividends, dividend_yield = calculate_all_dividend_yield(stock_id, current_price)
 
     # 🔹 回應訊息
     message = (
