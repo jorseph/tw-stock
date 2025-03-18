@@ -304,7 +304,7 @@ def calculate_all_dividend_yield(stock_id, current_price):
 
     # **計算還原殖利率**
     if current_price > 0:
-        restored_dividend_yield = (total_dividend_value / current_price)
+        restored_dividend_yield = (total_dividend_value / current_price) * 100.00
     else:
         restored_dividend_yield = 0.0
     print(f"📊 **還原殖利率: {restored_dividend_yield * 100:.2f}%**")
