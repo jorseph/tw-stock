@@ -177,7 +177,8 @@ async def etf(update: Update, context: CallbackContext) -> None:
         return
 
     # 🔹 計算最近一年配息總額 & 殖利率
-    total_dividends, dividend_yield = calculate_dividend_yield(stock_id, current_price)
+    # total_dividends, dividend_yield = calculate_dividend_yield(stock_id, current_price)
+    total_dividends, dividend_yield = calculate_all_dividend_yield(stock_id)
 
     # 🔹 回應訊息
     message = (
@@ -251,6 +252,74 @@ def calculate_dividend_yield(stock_id, current_price):
 
     return total_dividends, dividend_yield
 
+
+# 🔹 查詢配息資料並計算完整殖利率
+def calculate_all_dividend_yield(stock_id):
+    """ 計算股票完整殖利率（包含現金股利與股票股利） """
+    parameter = {
+        "dataset": "TaiwanStockDividend",
+        "data_id": stock_id,
+        "start_date": "2019-01-01",
+        "token": FINMIND_API_KEY,
+    }
+
+    response = requests.get("https://api.finmindtrade.com/api/v4/data", params=parameter)
+    data = response.json()
+
+    if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
+        print(f"❌ 無法獲取 {stock_id} 的配息數據")
+        return None
+
+    df_dividend = pd.DataFrame(data["data"])
+
+    # 轉換數據格式
+    df_dividend["date"] = pd.to_datetime(df_dividend["date"])
+    df_dividend["CashEarningsDistribution"] = pd.to_numeric(df_dividend["CashEarningsDistribution"], errors="coerce").fillna(0)
+    df_dividend["StockEarningsDistribution"] = pd.to_numeric(df_dividend["StockEarningsDistribution"], errors="coerce").fillna(0)
+
+    # 過濾掉不發股息的數據
+    df_dividend = df_dividend[(df_dividend["CashEarningsDistribution"] > 0) | (df_dividend["StockEarningsDistribution"] > 0)]
+
+    # 取得最近 4 次發放的配息數據
+    recent_dividends = df_dividend.sort_values(by="date", ascending=False).head(4)
+
+    # 計算總現金股利
+    total_cash_dividends = recent_dividends["CashEarningsDistribution"].sum()
+
+    # 計算總股票股利
+    total_stock_dividends = recent_dividends["StockEarningsDistribution"].sum()
+
+    # 取得最新股價
+    current_price = get_current_stock_price(stock_id)
+
+    if current_price is None:
+        print(f"⚠️ 無法取得 {stock_id} 的股價")
+        return None
+
+    # 1️⃣ **計算除權息後股價**
+    ex_rights_price = current_price - total_cash_dividends
+
+    # 2️⃣ **計算股票股利價值**
+    stock_dividend_value = ex_rights_price * total_stock_dividends
+
+    # 3️⃣ **計算總股利價值**
+    total_dividend_value = stock_dividend_value + (total_cash_dividends * 1000)
+
+    # 4️⃣ **計算還原殖利率**
+    restored_dividend_yield = (total_dividend_value / current_price) * 1000
+
+    # 🔹 **輸出計算結果**
+    print("\n📌 **計算結果**")
+    print(f"🟢 股票代號: {stock_id}")
+    print(f"💰 當前股價: {current_price:.2f} 元")
+    print(f"📉 除權息後股價: {ex_rights_price:.2f} 元")
+    print(f"💵 現金股利: {total_cash_dividends:.2f} 元")
+    print(f"📈 股票股利: {total_stock_dividends:.4f} 股")
+    print(f"💹 股票股利價值: {stock_dividend_value:.2f} 元")
+    print(f"💰 **總股利價值**: {total_dividend_value:.2f} 元")
+    print(f"📊 **還原殖利率: {restored_dividend_yield:.2f}%**")
+
+    return total_stock_dividends, restored_dividend_yield
 
 # 計算季度 ROE & 推估股價
 def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_date="2025-12-31"):
