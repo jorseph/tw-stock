@@ -283,7 +283,7 @@ def calculate_all_dividend_yield(stock_id, current_price):
     stock_dividend_value = total_stock_dividends * ex_rights_price
 
     # **計算總股利價值**
-    total_dividend_value = stock_dividend_value + (total_cash_dividends * 1000)
+    total_dividend_value = stock_dividend_value + total_cash_dividends
 
     # **計算還原殖利率**
     if current_price > 0:
