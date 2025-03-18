@@ -299,12 +299,12 @@ def calculate_all_dividend_yield(stock_id, current_price):
     print(f"💹 股票股利價值: {stock_dividend_value:.4f} 元")
 
     # **計算總股利價值**
-    total_dividend_value = stock_dividend_value + (total_cash_dividends * 1000)
+    total_dividend_value = stock_dividend_value + (total_cash_dividends)
     print(f"💰 總股利價值: {total_dividend_value:.4f} 元")
 
     # **計算還原殖利率**
     if current_price > 0:
-        restored_dividend_yield = (total_dividend_value / current_price) * 1000
+        restored_dividend_yield = (total_dividend_value / current_price)
     else:
         restored_dividend_yield = 0.0
     print(f"📊 **還原殖利率: {restored_dividend_yield:.4f}%**")
