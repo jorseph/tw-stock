@@ -254,7 +254,7 @@ def calculate_dividend_yield(stock_id, current_price):
 
 
 # 🔹 查詢配息資料並計算完整殖利率
-def calculate_all_dividend_yield(stock_id, current_price, df_dividend):
+def calculate_all_dividend_yield(stock_id, current_price):
     """ 
     計算完整殖利率（包含現金與股票股利） 
     """
