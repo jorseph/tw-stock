@@ -295,7 +295,7 @@ def calculate_all_dividend_yield(stock_id, current_price):
     print(f"📉 除權息後股價: {ex_rights_price:.4f} 元")
 
     # **計算股票股利價值**
-    stock_dividend_value = total_stock_dividends * ex_rights_price
+    stock_dividend_value = total_stock_dividends * ex_rights_price / 1000
     print(f"💹 股票股利價值: {stock_dividend_value:.4f} 元")
 
     # **計算總股利價值**
