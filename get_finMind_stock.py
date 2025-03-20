@@ -44,12 +44,14 @@ for stock_id in stock_list:
         time.sleep(1)
 
     except Exception as e:
-        print(f"查詢 {stock_id} 失敗: {e}")
+        # print(f"查詢 {stock_id} 失敗: {e}")
+        pass
 
 # 合併所有配息資料
 if all_dividends:
     final_df = pd.concat(all_dividends, ignore_index=True)
     final_df.to_csv("all_stock_dividends.csv", index=False)
-    print("所有股票的配息資料已儲存為 all_stock_dividends.csv")
+    # print("所有股票的配息資料已儲存為 all_stock_dividends.csv")
 else:
-    print("沒有獲取到任何配息資料")
+    # print("沒有獲取到任何配息資料")
+    pass

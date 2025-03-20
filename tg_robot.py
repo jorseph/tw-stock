@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # 設定日誌
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-print("當前工作目錄:", os.getcwd())
+# print("當前工作目錄:", os.getcwd())
 
 import pandas as pd
 from telegram import Update
@@ -96,7 +96,7 @@ async def recommend(update: Update, context: CallbackContext) -> None:
     df["平均淨利(%)"] = df["平均淨利(%)"].apply(lambda x: 0 if "-" in x else float(x.replace("+", "")))
 
     # 檢查清理後的數據
-    print(df[["淨利成長(%)", "平均淨利(%)"]].head())
+    # print(df[["淨利成長(%)", "平均淨利(%)"]].head())
 
     df["淨利成長(%)"] = pd.to_numeric(df["淨利成長(%)"], errors="coerce")
     df["平均淨利(%)"] = pd.to_numeric(df["平均淨利(%)"], errors="coerce")
@@ -178,7 +178,7 @@ async def etf(update: Update, context: CallbackContext) -> None:
 
     # 🔹 計算最近一年配息總額 & 殖利率
     # total_dividends, dividend_yield = calculate_dividend_yield(stock_id, current_price)
-    total_dividends, dividend_yield = calculate_all_dividend_yield(stock_id, current_price)
+    total_dividends, dividend_yield, dividends_count = calculate_all_dividend_yield(stock_id, current_price)
 
     # 🔹 回應訊息
     message = (
@@ -263,14 +263,15 @@ def calculate_all_dividend_yield(stock_id, current_price):
 
     # 🔹 過濾該股票的配息資料
     stock_dividends = df_dividend[df_dividend["stock_id"] == stock_id].copy()
-    print(f"🔹 股票 {stock_id} 配息資料筆數: {len(stock_dividends)}")
+    dividends_count = len(stock_dividends)
+    print(f"🔹 股票 {stock_id} 配息資料筆數: {dividends_count}")
 
-    # 確保 date 欄位為 datetime 格式
+    # 確保 date 欄位是 datetime 格式
     stock_dividends["date"] = pd.to_datetime(stock_dividends["date"], errors="coerce")
-    
+
     if stock_dividends.empty:
         print("⚠️ 無配息資料，回傳 0")
-        return 0.0, 0.0  # 如果該股票無配息資料，則回傳 0
+        return 0.0, 0.0, 0  # 如果該股票無配息資料，則回傳 0
 
     # 🔹 取得最近一年的配息
     one_year_ago = datetime.today() - timedelta(days=365)
@@ -280,7 +281,7 @@ def calculate_all_dividend_yield(stock_id, current_price):
     # 確保至少有 1 筆配息資料
     if last_year_dividends.empty:
         print("⚠️ 最近一年無配息資料，回傳 0")
-        return 0.0, 0.0
+        return 0.0, 0.0, 0
 
     # 計算最近一年的 **現金股利總額**
     total_cash_dividends = last_year_dividends["CashEarningsDistribution"].sum()
@@ -309,7 +310,7 @@ def calculate_all_dividend_yield(stock_id, current_price):
         restored_dividend_yield = 0.0
     print(f"📊 **還原殖利率: {restored_dividend_yield:.2f}%**")
 
-    return total_dividend_value, restored_dividend_yield
+    return total_dividend_value, restored_dividend_yield, dividends_count
 
 
 # 計算季度 ROE & 推估股價
