@@ -186,6 +186,7 @@ async def etf(update: Update, context: CallbackContext) -> None:
         f"🔹 **當前股價**: {current_price:.2f} 元\n"
         f"💸 **最近一年配息總額**: {total_dividends:.2f} 元 💰\n"
         f"📊 **殖利率**: {dividend_yield:.2f}%\n"
+        f"🔹 **配息筆數**: {dividends_count} 筆\n"
     )
     
     await update.message.reply_text(message, parse_mode="Markdown")
@@ -263,8 +264,6 @@ def calculate_all_dividend_yield(stock_id, current_price):
 
     # 🔹 過濾該股票的配息資料
     stock_dividends = df_dividend[df_dividend["stock_id"] == stock_id].copy()
-    dividends_count = len(stock_dividends)
-    print(f"🔹 股票 {stock_id} 配息資料筆數: {dividends_count}")
 
     # 確保 date 欄位是 datetime 格式
     stock_dividends["date"] = pd.to_datetime(stock_dividends["date"], errors="coerce")
@@ -277,6 +276,8 @@ def calculate_all_dividend_yield(stock_id, current_price):
     one_year_ago = datetime.today() - timedelta(days=365)
     last_year_dividends = stock_dividends[stock_dividends["date"] >= one_year_ago]
     print(f"🔹 過濾最近一年的配息資料筆數: {len(last_year_dividends)}")
+    dividends_count = len(last_year_dividends)
+    print(f"🔹 股票 {stock_id} 配息資料筆數: {dividends_count}")
     
     # 確保至少有 1 筆配息資料
     if last_year_dividends.empty:
