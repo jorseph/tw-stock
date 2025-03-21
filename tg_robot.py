@@ -259,9 +259,6 @@ def calculate_all_dividend_yield(stock_id, current_price):
     """ 
     計算完整殖利率（包含現金與股票股利） 
     """
-    print(f"\n📌 **DEBUG: 開始計算 {stock_id} 的完整殖利率**")
-    print(f"🔹 當前股價: {current_price}")
-
     # 🔹 過濾該股票的配息資料
     stock_dividends = df_dividend[df_dividend["stock_id"] == stock_id].copy()
 
@@ -269,49 +266,43 @@ def calculate_all_dividend_yield(stock_id, current_price):
     stock_dividends["date"] = pd.to_datetime(stock_dividends["date"], errors="coerce")
 
     if stock_dividends.empty:
-        print("⚠️ 無配息資料，回傳 0")
         return 0.0, 0.0, 0  # 如果該股票無配息資料，則回傳 0
 
     # 🔹 取得最近一年的配息
     one_year_ago = datetime.today() - timedelta(days=365)
+    
+    # 先按照日期排序
+    stock_dividends = stock_dividends.sort_values(by="date", ascending=False)
+    
+    # 取得最近一年的配息資料
     last_year_dividends = stock_dividends[stock_dividends["date"] >= one_year_ago]
-    print(f"🔹 過濾最近一年的配息資料筆數: {len(last_year_dividends)}")
-    dividends_count = len(last_year_dividends)
-    print(f"🔹 股票 {stock_id} 配息資料筆數: {dividends_count}")
     
     # 確保至少有 1 筆配息資料
     if last_year_dividends.empty:
-        print("⚠️ 最近一年無配息資料，回傳 0")
         return 0.0, 0.0, 0
 
     # 計算最近一年的 **現金股利總額**
     total_cash_dividends = last_year_dividends["CashEarningsDistribution"].sum()
-    print(f"💵 總現金股利: {total_cash_dividends:.4f} 元")
 
     # 計算最近一年的 **股票股利總額**
     total_stock_dividends = last_year_dividends["StockEarningsDistribution"].sum()
-    print(f"📈 總股票股利: {total_stock_dividends:.4f} 股")
 
     # **計算除權息後股價**
     ex_rights_price = max(current_price - total_cash_dividends, 0)  # 確保股價不為負
-    print(f"📉 除權息後股價: {ex_rights_price:.4f} 元")
 
     # **計算股票股利價值**
     stock_dividend_value = total_stock_dividends * ex_rights_price / 1000
-    print(f"💹 股票股利價值: {stock_dividend_value:.4f} 元")
 
     # **計算總股利價值**
     total_dividend_value = stock_dividend_value + (total_cash_dividends)
-    print(f"💰 總股利價值: {total_dividend_value:.4f} 元")
 
     # **計算還原殖利率**
     if current_price > 0:
         restored_dividend_yield = (total_dividend_value / current_price) * 100.00
     else:
         restored_dividend_yield = 0.0
-    print(f"📊 **還原殖利率: {restored_dividend_yield:.2f}%**")
 
-    return total_dividend_value, restored_dividend_yield, dividends_count
+    return total_dividend_value, restored_dividend_yield, len(last_year_dividends)
 
 
 # 計算季度 ROE & 推估股價
