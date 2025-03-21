@@ -2,6 +2,8 @@ import pandas as pd
 import logging
 import os
 import requests
+import signal
+import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from dotenv import load_dotenv
@@ -10,6 +12,18 @@ import numpy as np
 
 # 設定日誌
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 創建一個全局的 application 變量
+app = None
+
+# 信號處理函數
+def signal_handler(signum, frame):
+    logger.info("收到終止信號，正在優雅退出...")
+    if app:
+        logger.info("正在停止 Telegram Bot...")
+        app.stop()
+    sys.exit(0)
 
 # print("當前工作目錄:", os.getcwd())
 
@@ -517,6 +531,7 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
 
 
 def main():
+    global app
     load_dotenv()  # 載入 .env 變數
     
     # 讀取 Heroku 環境變數
@@ -524,16 +539,29 @@ def main():
 
     if not BOT_TOKEN:
         raise ValueError("未找到 BOT_TOKEN，請在 Heroku 環境變數設定 BOT_TOKEN")
-    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # 設置信號處理
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    try:
+        app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stock", stock))
-    app.add_handler(CommandHandler("recommend", recommend))
-    app.add_handler(CommandHandler("recommend_v2", recommend_v2))
-    app.add_handler(CommandHandler("etf", etf))
-    app.add_handler(CommandHandler("stock_estimate", stock_estimate))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("stock", stock))
+        app.add_handler(CommandHandler("recommend", recommend))
+        app.add_handler(CommandHandler("recommend_v2", recommend_v2))
+        app.add_handler(CommandHandler("etf", etf))
+        app.add_handler(CommandHandler("stock_estimate", stock_estimate))
 
-    app.run_polling()
+        logger.info("Bot 已啟動並開始運行...")
+        app.run_polling()
+        
+    except Exception as e:
+        logger.error(f"運行時發生錯誤: {str(e)}")
+        if app:
+            app.stop()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
