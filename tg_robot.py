@@ -400,8 +400,23 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
             if df_result is None or df_result.empty:
                 continue
                 
+            # 取最近 4 季的資料
+            last_4q = df_result.tail(4)
+            if len(last_4q) < 4:  # 如果不足 4 季的資料，跳過
+                continue
+                
             # 取最近一季的資料
-            latest_data = df_result.iloc[-1]
+            latest_data = last_4q.iloc[-1]
+            
+            # 檢查 ROE 趨勢
+            roe_values = last_4q["ROE"].values
+            roe_min = min(roe_values)
+            roe_max = max(roe_values)
+            roe_decline_ratio = (roe_max - roe_min) / roe_max if roe_max > 0 else float('inf')
+            
+            # 如果 ROE 下降超過 30%，跳過此股票
+            if roe_decline_ratio > 0.3:
+                continue
             
             # 取得目前股價
             current_price = get_current_stock_price(stock_id)
@@ -440,6 +455,14 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
             elif current_per < latest_data["PER_最高值"]:
                 value_score += 1
                 
+            # 4. ROE 穩定度評分
+            if roe_decline_ratio < 0.1:  # ROE 下降小於 10%
+                value_score += 3
+            elif roe_decline_ratio < 0.2:  # ROE 下降小於 20%
+                value_score += 2
+            elif roe_decline_ratio < 0.3:  # ROE 下降小於 30%
+                value_score += 1
+                
             # 儲存評估結果
             stock_info = df[df["代號"] == stock_id].iloc[0]
             stock_evaluations.append({
@@ -453,7 +476,8 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                 "高股價": latest_data["高股價"],
                 "value_score": value_score,
                 "price_to_low": price_to_low,
-                "price_to_normal": price_to_normal
+                "price_to_normal": price_to_normal,
+                "roe_decline_ratio": roe_decline_ratio * 100  # 轉換為百分比
             })
             
         except Exception as e:
@@ -470,6 +494,7 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
             f"🔹 **{stock['名稱']} ({stock['代號']})**\n"
             f"   💰 **目前股價**: {stock['目前股價']:.2f} 元\n"
             f"   📊 **ROE**: {stock['ROE']:.2f}%\n"
+            f"   📊 **ROE波動**: {stock['roe_decline_ratio']:.2f}%\n"
             f"   💵 **推估EPS**: {stock['推估EPS']:.2f}\n"
             f"   📉 **低股價**: {stock['低股價']:.2f} 元\n"
             f"   📊 **正常股價**: {stock['正常股價']:.2f} 元\n"
