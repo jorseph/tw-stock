@@ -268,14 +268,19 @@ def calculate_all_dividend_yield(stock_id, current_price):
     if stock_dividends.empty:
         return 0.0, 0.0, 0  # 如果該股票無配息資料，則回傳 0
 
-    # 🔹 取得最近一年的配息
-    one_year_ago = datetime.today() - timedelta(days=365)
-    
-    # 先按照日期排序
+    # 先按照日期排序（最新的在前）
     stock_dividends = stock_dividends.sort_values(by="date", ascending=False)
+
+    # 取得最近一年的配息
+    one_year_ago = datetime.today() - timedelta(days=365)
+    today = datetime.today()
     
-    # 取得最近一年的配息資料
-    last_year_dividends = stock_dividends[stock_dividends["date"] >= one_year_ago]
+    # 取得最近一年的配息資料，並確保不重複
+    last_year_dividends = stock_dividends[
+        (stock_dividends["date"] >= one_year_ago) & 
+        (stock_dividends["date"] <= today) &  # 排除未來的配息日期
+        (stock_dividends["CashEarningsDistribution"] > 0)  # 只取有現金股利的資料
+    ].drop_duplicates(subset=["date"])  # 移除同一天的重複資料
     
     # 確保至少有 1 筆配息資料
     if last_year_dividends.empty:
