@@ -109,7 +109,6 @@ async def recommend(update: Update, context: CallbackContext) -> None:
         (df["淨利成長(%)"] > 0.0) &
         (df["平均淨利(%)"] > 10.0) & 
         (df["平均ROE(%)"] > 10) &  # ROE 超過10%
-        (df["營收成長(%)"].abs() < 10) &  # 營收波動不超過10%
         (df["平均ROE增減"] > 0) &  # 平均ROE增減 > 0
         (df["平均毛利(%)"] > 30) &  # 毛利率 > 30%
         (df["統計年數_x"] > 5)  # 淨利率 > 10%
@@ -156,10 +155,9 @@ async def stock_estimate(update: Update, context: CallbackContext) -> None:
             f"\n🏦 **BVPS**: {row['BVPS']:.2f} 元"
             f"\n💰 **推估EPS**: {row['推估EPS']:.2f} 元"
             f"\n📈 **PER 區間**: {row['PER_最低值']:.2f} ~ {row['PER_最高值']:.2f}"
-            f"\n\n💰 **股價區間**:"
-            f"\n   📉 **低股價**: {row['低股價']:.2f} 元"
-            f"\n   📊 **正常股價**: {row['正常股價']:.2f} 元"
-            f"\n   📈 **高股價**: {row['高股價']:.2f} 元"
+            f"\n📉 **低股價**: {row['低股價']:.2f} 元"
+            f"\n📊 **正常股價**: {row['正常股價']:.2f} 元"
+            f"\n📈 **高股價**: {row['高股價']:.2f} 元"
             f"\n--------------------"
         )
 
