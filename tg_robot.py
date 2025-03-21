@@ -368,6 +368,119 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
     return df_quarterly
 
 
+# 新增 recommend_v2 函數
+async def recommend_v2(update: Update, context: CallbackContext) -> None:
+    if not context.args:
+        await update.message.reply_text("請輸入推薦股數，最多10 例如：/recommend_v2 5")
+        return
+
+    try:
+        count = int(context.args[0])  # 轉換成整數
+        if count <= 0:
+            await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend_v2 5")
+            return
+        if count > 10:
+            await update.message.reply_text("最多只能推薦 10 檔股票，請輸入小於等於 10 的數字")
+            return
+    except ValueError:
+        await update.message.reply_text("請輸入有效的數字，例如：/recommend_v2 5")
+        return
+
+    # 取得所有股票代號
+    stock_list = df["代號"].unique().tolist()
+    
+    # 儲存所有股票的評估結果
+    stock_evaluations = []
+    
+    # 評估每一檔股票
+    for stock_id in stock_list:
+        try:
+            # 取得股票估值資料
+            df_result = calculate_quarterly_stock_estimates(stock_id)
+            if df_result is None or df_result.empty:
+                continue
+                
+            # 取最近一季的資料
+            latest_data = df_result.iloc[-1]
+            
+            # 取得目前股價
+            current_price = get_current_stock_price(stock_id)
+            if current_price is None:
+                continue
+                
+            # 計算股價與合理價格的關係
+            price_to_low = current_price / latest_data["低股價"] if latest_data["低股價"] > 0 else float('inf')
+            price_to_normal = current_price / latest_data["正常股價"] if latest_data["正常股價"] > 0 else float('inf')
+            
+            # 計算投資價值分數
+            value_score = 0
+            
+            # 1. 股價低於低股價時分數最高
+            if current_price < latest_data["低股價"]:
+                value_score += 3
+            elif current_price < latest_data["正常股價"]:
+                value_score += 2
+            elif current_price < latest_data["高股價"]:
+                value_score += 1
+                
+            # 2. ROE 評分
+            if latest_data["ROE"] > 15:
+                value_score += 3
+            elif latest_data["ROE"] > 10:
+                value_score += 2
+            elif latest_data["ROE"] > 8:
+                value_score += 1
+                
+            # 3. 本益比評分（使用目前股價/推估EPS）
+            current_per = current_price / latest_data["推估EPS"] if latest_data["推估EPS"] > 0 else float('inf')
+            if current_per < latest_data["PER_最低值"]:
+                value_score += 3
+            elif current_per < latest_data["PER_平均值"]:
+                value_score += 2
+            elif current_per < latest_data["PER_最高值"]:
+                value_score += 1
+                
+            # 儲存評估結果
+            stock_info = df[df["代號"] == stock_id].iloc[0]
+            stock_evaluations.append({
+                "代號": stock_id,
+                "名稱": stock_info["名稱"],
+                "目前股價": current_price,
+                "ROE": latest_data["ROE"],
+                "推估EPS": latest_data["推估EPS"],
+                "低股價": latest_data["低股價"],
+                "正常股價": latest_data["正常股價"],
+                "高股價": latest_data["高股價"],
+                "value_score": value_score,
+                "price_to_low": price_to_low,
+                "price_to_normal": price_to_normal
+            })
+            
+        except Exception as e:
+            continue
+    
+    # 根據評分排序
+    sorted_stocks = sorted(stock_evaluations, 
+                         key=lambda x: (-x["value_score"], x["price_to_normal"]))[:count]
+    
+    # 生成回應訊息
+    message = f"📊 **推薦股票 V2 版本（前 {count} 名）**\n\n"
+    for stock in sorted_stocks:
+        message += (
+            f"🔹 **{stock['名稱']} ({stock['代號']})**\n"
+            f"   💰 **目前股價**: {stock['目前股價']:.2f} 元\n"
+            f"   📊 **ROE**: {stock['ROE']:.2f}%\n"
+            f"   💵 **推估EPS**: {stock['推估EPS']:.2f}\n"
+            f"   📉 **低股價**: {stock['低股價']:.2f} 元\n"
+            f"   📊 **正常股價**: {stock['正常股價']:.2f} 元\n"
+            f"   📈 **高股價**: {stock['高股價']:.2f} 元\n"
+            f"   ⭐ **投資價值分數**: {stock['value_score']}\n"
+            "--------------------\n"
+        )
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
 def main():
     load_dotenv()  # 載入 .env 變數
     
@@ -381,6 +494,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stock", stock))
     app.add_handler(CommandHandler("recommend", recommend))
+    app.add_handler(CommandHandler("recommend_v2", recommend_v2))
     app.add_handler(CommandHandler("etf", etf))
     app.add_handler(CommandHandler("stock_estimate", stock_estimate))
 
