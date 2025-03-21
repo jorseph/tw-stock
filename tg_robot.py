@@ -154,10 +154,13 @@ async def stock_estimate(update: Update, context: CallbackContext) -> None:
             f"\n📅 **季度**: {row['quarter']}"
             f"\n📊 **ROE**: {row['ROE']:.2f}%"
             f"\n🏦 **BVPS**: {row['BVPS']:.2f} 元"
-            f"\n💰 **推估EPS**: {row['推估EPS']:.2f} 元\n"
-            f"\n💰 **正常股價**: {row['正常股價']:.2f} 元\n"
-            f"\n💰 **低股價**: {row['低股價']:.2f} 元\n"
-            "--------------------"
+            f"\n💰 **推估EPS**: {row['推估EPS']:.2f} 元"
+            f"\n📈 **PER 區間**: {row['PER_最低值']:.2f} ~ {row['PER_最高值']:.2f}"
+            f"\n\n💰 **股價區間**:"
+            f"\n   📉 **低股價**: {row['低股價']:.2f} 元"
+            f"\n   📊 **正常股價**: {row['正常股價']:.2f} 元"
+            f"\n   📈 **高股價**: {row['高股價']:.2f} 元"
+            f"\n--------------------"
         )
 
     await update.message.reply_text(message, parse_mode="Markdown")
@@ -325,7 +328,6 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
     data = response.json()
 
     if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
-        print("❌ 無法獲取數據，請檢查 API 設定或股票代號")
         return None
 
     df = pd.DataFrame(data["data"])
@@ -335,42 +337,35 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
     df["PBR"] = pd.to_numeric(df["PBR"], errors="coerce")
     df["PER"] = pd.to_numeric(df["PER"], errors="coerce")
 
-    print("\n📌 **數據轉換後 (日期轉換 & 數值處理後)**")
-    print(df.tail())
-
     # 計算 ROE (%)
     df["ROE"] = (df["PBR"] / df["PER"]) * 100
 
     # 依季度取數據
     df["quarter"] = df["date"].dt.to_period("Q")
     
-    # **計算季度 PER 平均值 & 最低值**
-    df_per_stats = df.groupby("quarter")["PER"].agg(["mean", "min"]).reset_index()
-    df_per_stats.rename(columns={"mean": "PER_平均值", "min": "PER_最低值"}, inplace=True)
+    # **計算季度 PER 統計數據**
+    df_per_stats = df.groupby("quarter")["PER"].agg([
+        ("PER_最高值", "max"),
+        ("PER_平均值", "mean"),
+        ("PER_最低值", "min")
+    ]).reset_index()
 
     df_quarterly = df.groupby("quarter").last().reset_index()
 
     # **合併 PER 統計數據**
     df_quarterly = df_quarterly.merge(df_per_stats, on="quarter", how="left")
 
-    print("\n📌 **季度數據 (每季最後一天的數據)**")
-    print(df_quarterly.tail())
-
     # 🔹 **計算 BVPS**
     df_quarterly["prev_close"] = get_current_stock_price(stock_id)
     df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
 
-    # 🔹 **計算推估股價**
+    # 🔹 **計算推估EPS**
     df_quarterly["推估EPS"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"]
 
-    # 🔹 **計算正常股價（PER 平均值 × BVPS）**
+    # 🔹 **計算三種股價（高、中、低）**
+    df_quarterly["高股價"] = df_quarterly["PER_最高值"] * df_quarterly["推估EPS"]
     df_quarterly["正常股價"] = df_quarterly["PER_平均值"] * df_quarterly["推估EPS"]
-
-    # 🔹 **計算低股價（PER 最低值 × BVPS）**
     df_quarterly["低股價"] = df_quarterly["PER_最低值"] * df_quarterly["推估EPS"]
-
-    print("\n📌 **計算推估股價 之後**")
-    print(df_quarterly[["quarter", "stock_id", "ROE", "BVPS", "PER", "推估EPS", "正常股價", "低股價"]].tail())
 
     return df_quarterly
 
