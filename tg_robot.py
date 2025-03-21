@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+import numpy as np
 
 # 設定日誌
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -408,9 +409,20 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
             
             # 檢查 ROE 趨勢
             roe_values = last_4q["ROE"].values
-            roe_min = min(roe_values)
-            roe_max = max(roe_values)
-            roe_decline_ratio = (roe_max - roe_min) / roe_max if roe_max > 0 else float('inf')
+            # 過濾掉無效的 ROE 值
+            valid_roe_values = [x for x in roe_values if not pd.isna(x) and np.isfinite(x)]
+            
+            if len(valid_roe_values) < 4:  # 如果有效的 ROE 值少於 4 個季度，跳過此股票
+                continue
+                
+            roe_min = min(valid_roe_values)
+            roe_max = max(valid_roe_values)
+            
+            # 計算 ROE 下降比例，確保不會出現除以零或無效值的情況
+            if roe_max <= 0 or pd.isna(roe_max) or not np.isfinite(roe_max):
+                roe_decline_ratio = float('inf')
+            else:
+                roe_decline_ratio = (roe_max - roe_min) / roe_max
             
             # 如果 ROE 下降超過 30%，跳過此股票
             if roe_decline_ratio > 0.3:
