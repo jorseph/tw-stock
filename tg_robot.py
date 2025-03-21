@@ -71,21 +71,21 @@ async def stock(update: Update, context: CallbackContext) -> None:
 
 # 推薦前 15 筆股票（根據平均財報評分排序）
 async def recommend(update: Update, context: CallbackContext) -> None:
-    if not context.args:
-        await update.message.reply_text("請輸入推薦股數，最多20 例如：/recommend 15")
-        return
-
-    try:
-        count = int(context.args[0])  # 轉換成整數
-        if count <= 0:
-            await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend 10")
+    # 設定預設推薦數量為 5
+    count = 5
+    
+    if context.args:
+        try:
+            count = int(context.args[0])  # 轉換成整數
+            if count <= 0:
+                await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend 10")
+                return
+            if count > 15:
+                await update.message.reply_text("最多只能推薦 15 檔股票，請輸入小於等於 15 的數字")
+                return
+        except ValueError:
+            await update.message.reply_text("請輸入有效的數字，例如：/recommend 10")
             return
-        if count > 15:
-            await update.message.reply_text("最多只能推薦 15 檔股票，請輸入小於等於 15 的數字")
-            return
-    except ValueError:
-        await update.message.reply_text("請輸入有效的數字，例如：/recommend 10")
-        return
 
     # 處理 "淨利成長(%)" 欄位
     df["淨利成長(%)"] = df["淨利成長(%)"].astype(str).str.replace("%", "")
@@ -95,11 +95,9 @@ async def recommend(update: Update, context: CallbackContext) -> None:
     df["平均淨利(%)"] = df["平均淨利(%)"].astype(str).str.replace("%", "")
     df["平均淨利(%)"] = df["平均淨利(%)"].apply(lambda x: 0 if "-" in x else float(x.replace("+", "")))
 
-    # 檢查清理後的數據
-    # print(df[["淨利成長(%)", "平均淨利(%)"]].head())
-
     df["淨利成長(%)"] = pd.to_numeric(df["淨利成長(%)"], errors="coerce")
     df["平均淨利(%)"] = pd.to_numeric(df["平均淨利(%)"], errors="coerce")
+    
     # 過濾條件：
     # - 目前成交價 < 最低合理股價
     # - 淨利成長(%) > 0
@@ -370,21 +368,21 @@ def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_d
 
 # 新增 recommend_v2 函數
 async def recommend_v2(update: Update, context: CallbackContext) -> None:
-    if not context.args:
-        await update.message.reply_text("請輸入推薦股數，最多10 例如：/recommend_v2 5")
-        return
-
-    try:
-        count = int(context.args[0])  # 轉換成整數
-        if count <= 0:
-            await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend_v2 5")
+    # 設定預設推薦數量為 5
+    count = 5
+    
+    if context.args:
+        try:
+            count = int(context.args[0])  # 轉換成整數
+            if count <= 0:
+                await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend_v2 5")
+                return
+            if count > 10:
+                await update.message.reply_text("最多只能推薦 10 檔股票，請輸入小於等於 10 的數字")
+                return
+        except ValueError:
+            await update.message.reply_text("請輸入有效的數字，例如：/recommend_v2 5")
             return
-        if count > 10:
-            await update.message.reply_text("最多只能推薦 10 檔股票，請輸入小於等於 10 的數字")
-            return
-    except ValueError:
-        await update.message.reply_text("請輸入有效的數字，例如：/recommend_v2 5")
-        return
 
     # 取得所有股票代號
     stock_list = df["代號"].unique().tolist()
