@@ -13,9 +13,15 @@ import asyncio
 import json
 import aiohttp
 import time
+from typing import Dict, List, Optional
+import pickle
 
 # 設定日誌
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    encoding='utf-8'  # 添加 UTF-8 編碼
+)
 logger = logging.getLogger(__name__)
 
 # 創建一個全局的 application 變量
@@ -24,7 +30,49 @@ app = None
 # 添加全局變量來追蹤執行狀態
 is_processing = False
 current_task = None
-should_cancel = False  # 新增取消標記
+should_cancel = False
+
+# 緩存相關常量
+CACHE_FILE = "stock_data_cache.pkl"
+CACHE_EXPIRY_DAYS = 7  # 改為 7 天，因為基本面數據變化較慢
+BATCH_SIZE = 100  # 增加批次大小
+DELAY_BETWEEN_BATCHES = 1  # 減少批次間延遲到 30 秒
+MAX_CONCURRENT_REQUESTS = 10  # 增加並發請求數
+
+# 緩存數據結構
+class StockDataCache:
+    def __init__(self):
+        self.data: Dict[str, Dict] = {}
+        self.last_update: Dict[str, datetime] = {}
+    
+    def is_valid(self, stock_id: str) -> bool:
+        if stock_id not in self.last_update:
+            return False
+        return (datetime.now() - self.last_update[stock_id]).days < CACHE_EXPIRY_DAYS
+    
+    def get(self, stock_id: str) -> Optional[Dict]:
+        if self.is_valid(stock_id):
+            return self.data.get(stock_id)
+        return None
+    
+    def set(self, stock_id: str, data: Dict):
+        self.data[stock_id] = data
+        self.last_update[stock_id] = datetime.now()
+    
+    def save(self):
+        with open(CACHE_FILE, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(cls) -> 'StockDataCache':
+        try:
+            with open(CACHE_FILE, 'rb') as f:
+                return pickle.load(f)
+        except (FileNotFoundError, pickle.PickleError):
+            return cls()
+
+# 全局緩存對象
+stock_cache = StockDataCache.load()
 
 # 信號處理函數
 def signal_handler(signum, frame):
@@ -266,8 +314,11 @@ def calculate_all_dividend_yield(stock_id, current_price):
 
 
 # 修改 calculate_quarterly_stock_estimates 函數為異步函數
-async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_date="2025-12-31"):
+async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01", end_date=None):
     """ 透過 FinMind API 取得 PBR、PER，計算季度 ROE、BVPS、推估股價 """
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        
     parameter = {
         "dataset": "TaiwanStockPER",
         "data_id": stock_id,
@@ -276,56 +327,64 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
         "token": FINMIND_API_KEY,
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(FINMIND_URL, params=parameter) as response:
-            data = await response.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(FINMIND_URL, params=parameter) as response:
+                if response.status != 200:
+                    logger.error(f"API 請求失敗，狀態碼：{response.status}")
+                    return None
 
-            if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
-                return None
+                data = await response.json()
+                if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
+                    return None
 
-            df = pd.DataFrame(data["data"])
+                df = pd.DataFrame(data["data"])
 
-            # 確保數據格式
-            df["date"] = pd.to_datetime(df["date"])
-            df["PBR"] = pd.to_numeric(df["PBR"], errors="coerce")
-            df["PER"] = pd.to_numeric(df["PER"], errors="coerce")
+                # 確保數據格式
+                df["date"] = pd.to_datetime(df["date"])
+                df["PBR"] = pd.to_numeric(df["PBR"], errors="coerce")
+                df["PER"] = pd.to_numeric(df["PER"], errors="coerce")
 
-            # 計算 ROE (%)
-            df["ROE"] = (df["PBR"] / df["PER"]) * 100
+                # 計算 ROE (%)
+                df["ROE"] = (df["PBR"] / df["PER"]) * 100
 
-            # 依季度取數據
-            df["quarter"] = df["date"].dt.to_period("Q")
-            
-            # 計算季度 PER 統計數據
-            df_per_stats = df.groupby("quarter")["PER"].agg([
-                ("PER_最高值", "max"),
-                ("PER_平均值", "mean"),
-                ("PER_最低值", "min")
-            ]).reset_index()
+                # 依季度取數據
+                df["quarter"] = df["date"].dt.to_period("Q")
+                
+                # 計算季度 PER 統計數據
+                df_per_stats = df.groupby("quarter")["PER"].agg([
+                    ("PER_最高值", "max"),
+                    ("PER_平均值", "mean"),
+                    ("PER_最低值", "min")
+                ]).reset_index()
 
-            df_quarterly = df.groupby("quarter").last().reset_index()
+                df_quarterly = df.groupby("quarter").last().reset_index()
 
-            # 合併 PER 統計數據
-            df_quarterly = df_quarterly.merge(df_per_stats, on="quarter", how="left")
+                # 合併 PER 統計數據
+                df_quarterly = df_quarterly.merge(df_per_stats, on="quarter", how="left")
 
-            # 取得目前股價
-            current_price = await get_current_stock_price(stock_id)
-            if current_price is None:
-                return None
+                # 取得目前股價
+                current_price = await get_current_stock_price(stock_id)
+                if current_price is None:
+                    return None
 
-            # 計算 BVPS
-            df_quarterly["prev_close"] = current_price
-            df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
+                # 計算 BVPS
+                df_quarterly["prev_close"] = current_price
+                df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
 
-            # 計算推估EPS
-            df_quarterly["推估EPS"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"]
+                # 計算推估EPS
+                df_quarterly["推估EPS"] = (df_quarterly["ROE"] / 100) * df_quarterly["BVPS"]
 
-            # 計算三種股價（高、中、低）
-            df_quarterly["高股價"] = df_quarterly["PER_最高值"] * df_quarterly["推估EPS"]
-            df_quarterly["正常股價"] = df_quarterly["PER_平均值"] * df_quarterly["推估EPS"]
-            df_quarterly["低股價"] = df_quarterly["PER_最低值"] * df_quarterly["推估EPS"]
+                # 計算三種股價（高、中、低）
+                df_quarterly["高股價"] = df_quarterly["PER_最高值"] * df_quarterly["推估EPS"]
+                df_quarterly["正常股價"] = df_quarterly["PER_平均值"] * df_quarterly["推估EPS"]
+                df_quarterly["低股價"] = df_quarterly["PER_最低值"] * df_quarterly["推估EPS"]
 
-            return df_quarterly
+                return df_quarterly
+
+    except Exception as e:
+        logger.error(f"獲取股票 {stock_id} 數據時發生錯誤: {str(e)}")
+        return None
 
 
 # 添加獲取台股代號列表的函數
@@ -421,11 +480,93 @@ async def cancel_recommend(update: Update, context: CallbackContext) -> None:
     is_processing = False
     await update.message.reply_text("已發送取消指令，正在等待任務結束...")
 
-# 修改 recommend_v2 函數
+async def process_stock_batch(stock_ids: List[str], session: aiohttp.ClientSession) -> List[Dict]:
+    """處理一批股票數據"""
+    results = []
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    
+    async def process_single_stock(stock_id: str) -> Optional[Dict]:
+        async with semaphore:
+            try:
+                # 檢查緩存
+                cached_data = stock_cache.get(stock_id)
+                if cached_data:
+                    logger.info(f"使用緩存數據: {stock_id}")
+                    return cached_data
+                
+                # 獲取當前價格
+                current_price = await get_current_stock_price(stock_id)
+                if current_price is None:
+                    return None
+                
+                # 獲取估值資料（使用更長的時間範圍）
+                df_result = await calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01")
+                if df_result is None or df_result.empty:
+                    return None
+                
+                # 檢查是否有足夠的季度資料
+                if len(df_result) < 4:
+                    return None
+                
+                # 檢查 ROE 是否大於 15
+                latest_roe = df_result.iloc[0]["ROE"]
+                if latest_roe <= 15:
+                    return None
+                
+                # 計算 ROE 趨勢
+                roe_values = df_result["ROE"].tolist()
+                valid_roe_values = [roe for roe in roe_values if roe > 0]
+                if len(valid_roe_values) < 4:
+                    return None
+                
+                roe_trend = all(valid_roe_values[i] >= valid_roe_values[i+1] for i in range(len(valid_roe_values)-1))
+                roe_volatility = (max(valid_roe_values) - min(valid_roe_values)) / min(valid_roe_values) * 100
+                
+                if not roe_trend and roe_volatility > 30:
+                    return None
+                
+                # 計算價值分數
+                price_to_low = current_price / df_result.iloc[0]["PER_最低值"]
+                current_per = df_result.iloc[0]["PER_最低值"]
+                value_score = (price_to_low * 0.7 + (1 / current_per) * 0.3) * 100
+                
+                result = {
+                    "stock_id": stock_id,
+                    "current_price": current_price,
+                    "value_score": value_score,
+                    "roe": latest_roe,
+                    "price_to_low": price_to_low,
+                    "current_per": current_per
+                }
+                
+                # 保存到緩存
+                stock_cache.set(stock_id, result)
+                return result
+                
+            except Exception as e:
+                logger.error(f"處理股票 {stock_id} 時發生錯誤: {str(e)}")
+                return None
+    
+    # 並發處理該批次的所有股票
+    tasks = [process_single_stock(stock_id) for stock_id in stock_ids]
+    results = await asyncio.gather(*tasks)
+    
+    # 過濾掉 None 結果
+    return [r for r in results if r is not None]
+
 async def recommend_v2(update: Update, context: CallbackContext) -> None:
     """推薦股票 v2 版本"""
+    global is_processing, should_cancel
+    
+    if is_processing:
+        await update.message.reply_text("已有推薦任務正在執行中，請稍後再試")
+        return
+    
     try:
-        # 直接从 API 获取最近5天的所有股票价格
+        is_processing = True
+        should_cancel = False
+        
+        # 獲取所有股票代碼
         parameter = {
             "dataset": "TaiwanStockPrice",
             "start_date": (datetime.today() - timedelta(days=5)).strftime('%Y-%m-%d'),
@@ -453,75 +594,45 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                     })
                 
                 df_price = pd.DataFrame(price_data)
-                # 获取所有股票代码
                 stock_list = df_price['stock_id'].unique().tolist()
                 logger.info(f"成功獲取 {len(stock_list)} 支股票數據")
 
-        results = []
+        # 分批處理股票
+        all_results = []
+        total_batches = (len(stock_list) + BATCH_SIZE - 1) // BATCH_SIZE
         
-        for stock_id in stock_list:
-            try:
-                # 获取当前价格（从最近5天的数据中获取最新价格）
-                stock_data = df_price[df_price['stock_id'] == stock_id]
-                if stock_data.empty:
-                    continue
-                current_price = stock_data.sort_values('date').iloc[-1]['close']
+        for i in range(0, len(stock_list), BATCH_SIZE):
+            if should_cancel:
+                await update.message.reply_text("任務已取消")
+                break
                 
-                # 获取估值資料
-                df_result = await calculate_quarterly_stock_estimates(stock_id)
-                if df_result is None or df_result.empty:
-                    continue
-                
-                # 检查是否有足够的季度資料
-                if len(df_result) < 4:
-                    continue
-                
-                # 检查 ROE 是否大于 15
-                latest_roe = df_result.iloc[0]["ROE"]
-                if latest_roe <= 15:
-                    continue
-                
-                # 计算 ROE 趋势
-                roe_values = df_result["ROE"].tolist()
-                valid_roe_values = [roe for roe in roe_values if roe > 0]
-                if len(valid_roe_values) < 4:
-                    continue
-                
-                roe_trend = all(valid_roe_values[i] >= valid_roe_values[i+1] for i in range(len(valid_roe_values)-1))
-                roe_volatility = (max(valid_roe_values) - min(valid_roe_values)) / min(valid_roe_values) * 100
-                
-                if not roe_trend and roe_volatility > 30:
-                    continue
-                
-                # 计算价值分数
-                price_to_low = current_price / df_result.iloc[0]["PER_最低值"]
-                current_per = df_result.iloc[0]["PER_最低值"]
-                value_score = (price_to_low * 0.7 + (1 / current_per) * 0.3) * 100
-                
-                results.append({
-                    "stock_id": stock_id,
-                    "current_price": current_price,
-                    "value_score": value_score,
-                    "roe": latest_roe,
-                    "price_to_low": price_to_low,
-                    "current_per": current_per
-                })
-                
-            except Exception as e:
-                logger.error(f"處理股票 {stock_id} 時發生錯誤: {str(e)}")
-                continue
+            batch = stock_list[i:i + BATCH_SIZE]
+            current_batch = (i // BATCH_SIZE) + 1
             
-            # 每處理一支股票後暫停一下，避免 API 限制
-            await asyncio.sleep(0.5)
+            # 發送進度更新
+            progress_message = f"正在處理第 {current_batch}/{total_batches} 批，共 {len(batch)} 支股票..."
+            await update.message.reply_text(progress_message)
+            
+            # 處理當前批次
+            batch_results = await process_stock_batch(batch, session)
+            all_results.extend(batch_results)
+            
+            # 批次間延遲
+            if current_batch < total_batches:
+                await asyncio.sleep(DELAY_BETWEEN_BATCHES)
+        
+        # 保存緩存
+        stock_cache.save()
         
         # 根據價值分數排序
-        results.sort(key=lambda x: x["value_score"], reverse=True)
+        all_results.sort(key=lambda x: x["value_score"], reverse=True)
         
         # 選取前 10 支股票
-        top_10 = results[:10]
+        top_10 = all_results[:10]
         
         # 生成推薦訊息
         message = "📊 股票推薦 (v2)\n\n"
+        message += "🔹 根據價值分數排序：\n"
         for i, stock in enumerate(top_10, 1):
             message += f"{i}. {stock['stock_id']}\n"
             message += f"   現價: {stock['current_price']:.2f}\n"
@@ -530,11 +641,26 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
             message += f"   股價/低點: {stock['price_to_low']:.2f}\n"
             message += f"   本益比: {stock['current_per']:.2f}\n\n"
         
+        # 根據 ROE 排序
+        roe_sorted = sorted(all_results, key=lambda x: x["roe"], reverse=True)
+        top_10_roe = roe_sorted[:10]
+        
+        message += "\n🔹 根據 ROE 排序：\n"
+        for i, stock in enumerate(top_10_roe, 1):
+            message += f"{i}. {stock['stock_id']}\n"
+            message += f"   現價: {stock['current_price']:.2f}\n"
+            message += f"   ROE: {stock['roe']:.2f}%\n"
+            message += f"   價值分數: {stock['value_score']:.2f}\n"
+            message += f"   股價/低點: {stock['price_to_low']:.2f}\n"
+            message += f"   本益比: {stock['current_per']:.2f}\n\n"
+        
         await update.message.reply_text(message)
         
     except Exception as e:
         logger.error(f"推薦股票時發生錯誤: {str(e)}")
         await update.message.reply_text("處理過程中發生錯誤，請稍後再試")
+    finally:
+        is_processing = False
 
 def main():
     global app
