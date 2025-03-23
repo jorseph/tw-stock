@@ -12,6 +12,7 @@ import numpy as np
 import asyncio
 import json
 import aiohttp
+import time
 
 # 設定日誌
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -59,90 +60,6 @@ df_dividend["stock_id"] = df_dividend["stock_id"].astype(str)
 
 # 確保 "CashEarningsDistribution" 欄位是數值類型（避免 NaN 問題）
 df_dividend["CashEarningsDistribution"] = pd.to_numeric(df_dividend["CashEarningsDistribution"], errors='coerce')
-
-# 在文件開頭添加緩存相關變量
-CACHE_FILE = "stock_cache.json"  # 暫存檔案名稱
-CACHE_DURATION = timedelta(hours=24)  # 緩存有效期為 24 小時
-
-# 全局緩存變量
-price_cache = {}  # 股價緩存
-
-def save_cache():
-    """保存暫存資料"""
-    try:
-        logger.info("開始保存緩存數據...")
-        cache_data = {
-            'price_cache': price_cache
-        }
-        
-        logger.info(f"股價緩存數量：{len(price_cache)}")
-        
-        logger.info(f"開始寫入緩存文件：{CACHE_FILE}")
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(cache_data, f)
-        logger.info("緩存數據保存完成")
-    except Exception as e:
-        logger.error(f"保存暫存時發生錯誤: {str(e)}")
-        logger.error(f"錯誤詳情: {type(e).__name__}")
-        import traceback
-        logger.error(f"錯誤堆疊: {traceback.format_exc()}")
-
-def load_cache():
-    """載入暫存資料"""
-    try:
-        if os.path.exists(CACHE_FILE):
-            logger.info(f"開始載入緩存文件：{CACHE_FILE}")
-            with open(CACHE_FILE, 'r') as f:
-                cache_data = json.load(f)
-                
-                # 檢查 price_cache
-                if 'price_cache' in cache_data:
-                    logger.info(f"成功載入股價緩存，共 {len(cache_data['price_cache'])} 支股票")
-                    logger.info(f"前 5 支股票的股價：{dict(list(cache_data['price_cache'].items())[:5])}")
-                else:
-                    logger.error("緩存文件中沒有 price_cache 數據")
-                
-                logger.info("緩存載入完成")
-                return cache_data.get('price_cache', {})
-        else:
-            logger.warning(f"緩存文件 {CACHE_FILE} 不存在")
-    except Exception as e:
-        logger.error(f"載入暫存時發生錯誤: {str(e)}")
-        logger.error(f"錯誤詳情: {type(e).__name__}")
-        import traceback
-        logger.error(f"錯誤堆疊: {traceback.format_exc()}")
-    return {}
-
-# 載入暫存資料
-price_cache = load_cache()
-
-def get_cached_price(stock_id):
-    """從緩存獲取股價"""
-    global price_cache
-    
-    try:
-        # 確保緩存已載入
-        if not price_cache:
-            logger.info("股價緩存為空，嘗試重新載入")
-            price_cache = load_cache()
-            
-        # 檢查股票是否在緩存中
-        if stock_id in price_cache:
-            logger.info(f"成功從緩存獲取股票 {stock_id} 的股價：{price_cache[stock_id]}")
-            return price_cache[stock_id]
-        else:
-            logger.warning(f"股票 {stock_id} 不在股價緩存中")
-            logger.info(f"當前緩存中的股票數量：{len(price_cache)}")
-            logger.info(f"緩存中的股票列表：{list(price_cache.keys())[:10]}...")  # 只顯示前10支股票
-            return None
-    except Exception as e:
-        logger.error(f"獲取緩存股價時發生錯誤: {str(e)}")
-        return None
-
-def set_cached_price(stock_id, price):
-    """設置股價緩存"""
-    price_cache[stock_id] = price
-    save_cache()  # 保存到檔案
 
 # 設定機器人
 async def start(update: Update, context: CallbackContext) -> None:
@@ -214,42 +131,52 @@ async def etf(update: Update, context: CallbackContext) -> None:
 
 # 修改 get_current_stock_price 函數為異步函數
 async def get_current_stock_price(stock_id):
-    # 先檢查緩存
-    cached_price = get_cached_price(stock_id)
-    if cached_price is not None:
-        return cached_price
-
-    # 設定最大回溯天數，避免過度請求 API
-    max_days = 5  
-    check_date = datetime.today() - timedelta(days=1)  # 預設查詢前一天
-
-    for _ in range(max_days):
-        # 格式化日期
-        start_date = check_date.strftime('%Y-%m-%d')
-
+    """获取股票当前价格，直接从 API 获取最近5天的数据"""
+    try:
+        # 获取最近5天的数据
         parameter = {
             "dataset": "TaiwanStockPrice",
-            "data_id": stock_id,
-            "start_date": start_date,
+            "start_date": (datetime.today() - timedelta(days=5)).strftime('%Y-%m-%d'),
             "token": FINMIND_API_KEY,
         }
 
         async with aiohttp.ClientSession() as session:
             async with session.get(FINMIND_URL, params=parameter) as response:
+                if response.status != 200:
+                    logger.error(f"API 请求失败，状态码：{response.status}")
+                    return None
+
                 data = await response.json()
 
-                # 檢查 API 回應是否有數據
+                # 检查 API 回应是否有数据
                 if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
                     df_price = pd.DataFrame(data["data"])
-                    latest_price = df_price.sort_values(by="date", ascending=False).iloc[0]["close"]
-                    # 設置緩存
-                    set_cached_price(stock_id, latest_price)
-                    return latest_price
+                    
+                    # 确保日期格式正确
+                    df_price['date'] = pd.to_datetime(df_price['date'])
+                    
+                    # 确保数值字段为数值类型
+                    numeric_columns = ['Trading_Volume', 'Trading_money', 'open', 'max', 'min', 'close', 'spread', 'Trading_turnover']
+                    for col in numeric_columns:
+                        if col in df_price.columns:
+                            df_price[col] = pd.to_numeric(df_price[col], errors='coerce')
+                    
+                    # 获取指定股票的最新收盘价
+                    stock_data = df_price[df_price['stock_id'] == stock_id]
+                    if not stock_data.empty:
+                        latest_price = stock_data.sort_values('date').iloc[-1]['close']
+                        logger.info(f"成功获取股票 {stock_id} 的最新价格：{latest_price}")
+                        return latest_price
+                    else:
+                        logger.warning(f"未找到股票 {stock_id} 的价格数据")
+                else:
+                    logger.warning("API 返回数据为空")
 
-                # 如果沒有數據，向前推一天
-                check_date -= timedelta(days=1)
+        return None
 
-    return None
+    except Exception as e:
+        logger.error(f"获取股票 {stock_id} 价格时发生错误: {str(e)}")
+        return None
 
 
 def calculate_dividend_yield(stock_id, current_price):
@@ -429,7 +356,13 @@ def get_taiwan_stock_list():
         # 過濾掉特殊股票（如權證、期貨等）
         df_stocks = df_stocks[~df_stocks["stock_id"].str.startswith(('0', '9'))]
         
-        return df_stocks["stock_id"].tolist()
+        # 添加日誌記錄
+        logger.info(f"從 API 獲取的股票總數：{len(df_stocks)}")
+        logger.info(f"股票代碼範圍：{df_stocks['stock_id'].min()} 到 {df_stocks['stock_id'].max()}")
+        
+        stock_list = df_stocks["stock_id"].tolist()
+        logger.info(f"成功獲取 {len(stock_list)} 支上市股票")
+        return stock_list
         
     except Exception as e:
         logger.error(f"獲取股票列表時發生錯誤: {str(e)}")
@@ -490,293 +423,118 @@ async def cancel_recommend(update: Update, context: CallbackContext) -> None:
 
 # 修改 recommend_v2 函數
 async def recommend_v2(update: Update, context: CallbackContext) -> None:
-    global is_processing, should_cancel
-    
-    # 檢查是否已經在執行
-    if is_processing:
-        await update.message.reply_text("⚠️ 已經有一個推薦任務正在執行中，請等待完成或使用 /cancel_recommend 取消")
-        return
-    
-    # 重置取消標記
-    should_cancel = False
-    
-    # 設定預設推薦數量為 5
-    count = 5
-    
-    if context.args:
-        try:
-            count = int(context.args[0])
-            if count <= 0:
-                await update.message.reply_text("請輸入大於 0 的數量，例如：/recommend_v2 5")
-                return
-            if count > 10:
-                await update.message.reply_text("最多只能推薦 10 檔股票，請輸入小於等於 10 的數字")
-                return
-        except ValueError:
-            await update.message.reply_text("請輸入有效的數字，例如：/recommend_v2 5")
-            return
-
-    logger.info(f"開始執行 recommend_v2，推薦數量：{count}")
-    
-    # 設置執行狀態
-    is_processing = True
-    current_task = asyncio.current_task()
-    
+    """推薦股票 v2 版本"""
     try:
-        # 嘗試載入上次的下載進度
-        stock_list, download_index = load_progress()
-        
-        # 如果沒有下載進度或進度已過期，重新獲取股票列表
-        if not stock_list:
-            stock_list = get_taiwan_stock_list()
-            if not stock_list:
-                await update.message.reply_text("⚠️ 無法獲取股票列表，請稍後再試")
-                return
-            download_index = 0
-            save_progress(stock_list, download_index)
-            logger.info(f"重新開始下載：總股票數量 {len(stock_list)}")
-        
-        logger.info(f"總股票數量：{len(stock_list)}，從第 {download_index} 筆開始下載")
-        
-        # 分批下載股票數據
-        batch_size = 100  # 每批處理 100 支股票
-        for i in range(download_index, len(stock_list), batch_size):
-            # 檢查是否被取消
-            if should_cancel:
-                logger.info("收到取消指令，正在結束任務...")
-                await update.message.reply_text("⚠️ 推薦任務已被取消")
-                return
+        # 直接从 API 获取最近5天的所有股票价格
+        parameter = {
+            "dataset": "TaiwanStockPrice",
+            "start_date": (datetime.today() - timedelta(days=5)).strftime('%Y-%m-%d'),
+            "token": FINMIND_API_KEY,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(FINMIND_URL, params=parameter) as response:
+                if response.status != 200:
+                    await update.message.reply_text("無法獲取股票數據，請稍後再試")
+                    return
+
+                data = await response.json()
+                if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
+                    await update.message.reply_text("API 返回數據為空")
+                    return
+
+                # 只保留需要的字段
+                price_data = []
+                for item in data["data"]:
+                    price_data.append({
+                        "stock_id": item["stock_id"],
+                        "date": item["date"],
+                        "close": float(item["close"])
+                    })
                 
-            batch_stocks = stock_list[i:i + batch_size]
-            logger.info(f"正在下載第 {i+1} 到 {min(i+batch_size, len(stock_list))} 支股票")
-            
+                df_price = pd.DataFrame(price_data)
+                # 获取所有股票代码
+                stock_list = df_price['stock_id'].unique().tolist()
+                logger.info(f"成功獲取 {len(stock_list)} 支股票數據")
+
+        results = []
+        
+        for stock_id in stock_list:
             try:
-                # 檢查哪些股票需要獲取股價
-                uncached_stocks = [stock_id for stock_id in batch_stocks if get_cached_price(stock_id) is None]
-                logger.info(f"需要獲取股價的股票數量：{len(uncached_stocks)}")
-                logger.info(f"需要獲取股價的股票列表：{uncached_stocks[:5]}...")  # 只顯示前5支股票
+                # 获取当前价格（从最近5天的数据中获取最新价格）
+                stock_data = df_price[df_price['stock_id'] == stock_id]
+                if stock_data.empty:
+                    continue
+                current_price = stock_data.sort_values('date').iloc[-1]['close']
                 
-                if uncached_stocks:
-                    # 只對未緩存的股票進行 API 請求
-                    tasks = [get_current_stock_price(stock_id) for stock_id in uncached_stocks]
-                    prices = await asyncio.gather(*tasks)
-                    
-                    for stock_id, price in zip(uncached_stocks, prices):
-                        if price is not None:
-                            set_cached_price(stock_id, price)
-                            logger.info(f"成功獲取並緩存股票 {stock_id} 的股價：{price}")
+                # 获取估值資料
+                df_result = await calculate_quarterly_stock_estimates(stock_id)
+                if df_result is None or df_result.empty:
+                    continue
                 
-                # 更新下載進度
-                next_index = i + batch_size
-                if next_index >= len(stock_list):
-                    next_index = len(stock_list)
-                save_progress(stock_list, next_index)
-                logger.info(f"已更新下載進度到第 {next_index} 筆")
+                # 检查是否有足够的季度資料
+                if len(df_result) < 4:
+                    continue
                 
-                # 定期保存緩存
-                save_cache()
-                logger.info("已保存緩存數據")
+                # 检查 ROE 是否大于 15
+                latest_roe = df_result.iloc[0]["ROE"]
+                if latest_roe <= 15:
+                    continue
+                
+                # 计算 ROE 趋势
+                roe_values = df_result["ROE"].tolist()
+                valid_roe_values = [roe for roe in roe_values if roe > 0]
+                if len(valid_roe_values) < 4:
+                    continue
+                
+                roe_trend = all(valid_roe_values[i] >= valid_roe_values[i+1] for i in range(len(valid_roe_values)-1))
+                roe_volatility = (max(valid_roe_values) - min(valid_roe_values)) / min(valid_roe_values) * 100
+                
+                if not roe_trend and roe_volatility > 30:
+                    continue
+                
+                # 计算价值分数
+                price_to_low = current_price / df_result.iloc[0]["PER_最低值"]
+                current_per = df_result.iloc[0]["PER_最低值"]
+                value_score = (price_to_low * 0.7 + (1 / current_per) * 0.3) * 100
+                
+                results.append({
+                    "stock_id": stock_id,
+                    "current_price": current_price,
+                    "value_score": value_score,
+                    "roe": latest_roe,
+                    "price_to_low": price_to_low,
+                    "current_per": current_per
+                })
                 
             except Exception as e:
-                logger.error(f"下載批次時發生錯誤: {str(e)}")
-                logger.error(f"錯誤詳情: {type(e).__name__}")
-                import traceback
-                logger.error(f"錯誤堆疊: {traceback.format_exc()}")
-                # 保存當前下載進度
-                save_progress(stock_list, i)
-                await update.message.reply_text(f"⚠️ 下載過程中發生錯誤，已保存進度，下次將從第 {i+1} 支股票繼續下載")
-                return
-        
-        # 開始評估股票
-        logger.info("開始評估股票...")
-        
-        # 儲存所有股票的評估結果
-        stock_evaluations = []
-        processed_stocks = set()  # 用於追蹤已處理的股票
-        
-        # 分批評估股票
-        for i in range(0, len(stock_list), batch_size):
-            # 檢查是否被取消
-            if should_cancel:
-                logger.info("收到取消指令，正在結束任務...")
-                await update.message.reply_text("⚠️ 推薦任務已被取消")
-                return
-                
-            batch_stocks = stock_list[i:i + batch_size]
-            logger.info(f"正在評估第 {i+1} 到 {min(i+batch_size, len(stock_list))} 支股票")
+                logger.error(f"處理股票 {stock_id} 時發生錯誤: {str(e)}")
+                continue
             
-            try:
-                # 處理評估結果
-                for stock_id in batch_stocks:
-                    try:
-                        # 檢查是否已經處理過這支股票
-                        if stock_id in processed_stocks:
-                            logger.info(f"股票 {stock_id} 已經處理過，跳過")
-                            continue
-                            
-                        # 從緩存獲取股價
-                        current_price = get_cached_price(stock_id)
-                        
-                        if current_price is None:
-                            logger.info(f"股票 {stock_id} 沒有股價數據")
-                            continue
-                            
-                        # 直接計算估值數據
-                        df_result = await calculate_quarterly_stock_estimates(stock_id)
-                        if df_result is None:
-                            logger.info(f"股票 {stock_id} 無法計算估值數據")
-                            continue
-                            
-                        # 輸出數據的內容
-                        logger.info(f"股票 {stock_id} 的數據：")
-                        logger.info(f"股價：{current_price}")
-                        logger.info(f"估值數據：\n{df_result}")
-                            
-                        # 取最近 4 季的資料
-                        last_4q = df_result.tail(4)
-                        if len(last_4q) < 4:
-                            logger.info(f"股票 {stock_id} 的季度數據不足 4 季，只有 {len(last_4q)} 季")
-                            continue
-                            
-                        # 取最近一季的資料
-                        latest_data = last_4q.iloc[-1]
-                        logger.info(f"股票 {stock_id} 最近一季數據：\n{latest_data}")
-                        
-                        # 檢查 ROE 趨勢
-                        roe_values = last_4q["ROE"].values
-                        valid_roe_values = [x for x in roe_values if not pd.isna(x) and np.isfinite(x)]
-                        logger.info(f"股票 {stock_id} 的 ROE 值：{roe_values}")
-                        logger.info(f"股票 {stock_id} 的有效 ROE 值：{valid_roe_values}")
-                        
-                        if len(valid_roe_values) < 4:
-                            logger.info(f"股票 {stock_id} 的有效 ROE 數據不足 4 季，只有 {len(valid_roe_values)} 季")
-                            continue
-                            
-                        # 計算 ROE 趨勢
-                        roe_trend = np.diff(valid_roe_values)
-                        roe_increasing = all(x > 0 for x in roe_trend)
-                        roe_decline_ratio = (max(valid_roe_values) - min(valid_roe_values)) / max(valid_roe_values) if max(valid_roe_values) > 0 else float('inf')
-                        logger.info(f"股票 {stock_id} 的 ROE 趨勢：{roe_trend}")
-                        logger.info(f"股票 {stock_id} 的 ROE 是否上升：{roe_increasing}")
-                        logger.info(f"股票 {stock_id} 的 ROE 波動率：{roe_decline_ratio}")
-                        
-                        # 檢查 ROE 是否大於 15
-                        if latest_data["ROE"] <= 15:
-                            logger.info(f"股票 {stock_id} 的 ROE ({latest_data['ROE']}) 小於等於 15，不符合條件")
-                            continue
-                            
-                        if not roe_increasing and roe_decline_ratio > 0.3:
-                            logger.info(f"股票 {stock_id} 的 ROE 趨勢不符合條件")
-                            continue
-                            
-                        price_to_low = current_price / latest_data["低股價"] if latest_data["低股價"] > 0 else float('inf')
-                        price_to_normal = current_price / latest_data["正常股價"] if latest_data["正常股價"] > 0 else float('inf')
-                        logger.info(f"股票 {stock_id} 的價格比率：")
-                        logger.info(f"price_to_low: {price_to_low}")
-                        logger.info(f"price_to_normal: {price_to_normal}")
-                        
-                        value_score = 0
-                        
-                        if current_price < latest_data["低股價"]:
-                            value_score += 3
-                        elif current_price < latest_data["正常股價"]:
-                            value_score += 2
-                        elif current_price < latest_data["高股價"]:
-                            value_score += 1
-                            
-                        if latest_data["ROE"] > 15:
-                            value_score += 3
-                        elif latest_data["ROE"] > 10:
-                            value_score += 2
-                        elif latest_data["ROE"] > 8:
-                            value_score += 1
-                            
-                        current_per = current_price / latest_data["推估EPS"] if latest_data["推估EPS"] > 0 else float('inf')
-                        if current_per < latest_data["PER_最低值"]:
-                            value_score += 3
-                        elif current_per < latest_data["PER_平均值"]:
-                            value_score += 2
-                        elif current_per < latest_data["PER_最高值"]:
-                            value_score += 1
-                            
-                        if roe_increasing:
-                            value_score += 3
-                        elif roe_decline_ratio < 0.1:
-                            value_score += 2
-                        elif roe_decline_ratio < 0.2:
-                            value_score += 1
-                        
-                        logger.info(f"股票 {stock_id} 的評分計算：")
-                        logger.info(f"value_score: {value_score}")
-                        logger.info(f"current_per: {current_per}")
-                        
-                        # 添加到評估結果列表
-                        stock_evaluations.append({
-                            "stock_id": stock_id,
-                            "目前股價": current_price,
-                            "ROE": latest_data["ROE"],
-                            "推估EPS": latest_data["推估EPS"],
-                            "低股價": latest_data["低股價"],
-                            "正常股價": latest_data["正常股價"],
-                            "高股價": latest_data["高股價"],
-                            "value_score": value_score,
-                            "price_to_low": price_to_low,
-                            "price_to_normal": price_to_normal,
-                            "roe_decline_ratio": roe_decline_ratio * 100,
-                            "roe_trend": "上升" if roe_increasing else "下降"
-                        })
-                        
-                        # 記錄已處理的股票
-                        processed_stocks.add(stock_id)
-                        logger.info(f"成功評估股票 {stock_id}，分數：{value_score}")
-                        
-                    except Exception as e:
-                        logger.error(f"處理股票 {stock_id} 時發生錯誤: {str(e)}")
-                        continue
-                
-            except Exception as e:
-                logger.error(f"評估批次時發生錯誤: {str(e)}")
-                await update.message.reply_text("⚠️ 評估過程中發生錯誤")
-                return
+            # 每處理一支股票後暫停一下，避免 API 限制
+            await asyncio.sleep(0.5)
         
-        logger.info(f"成功評估的股票數量：{len(stock_evaluations)}")
-        logger.info(f"已處理的股票數量：{len(processed_stocks)}")
+        # 根據價值分數排序
+        results.sort(key=lambda x: x["value_score"], reverse=True)
         
-        if not stock_evaluations:
-            await update.message.reply_text("⚠️ 沒有找到符合條件的股票")
-            return
+        # 選取前 10 支股票
+        top_10 = results[:10]
         
-        # 確保沒有重複的股票
-        unique_stocks = {stock["stock_id"]: stock for stock in stock_evaluations}.values()
-        sorted_stocks = sorted(unique_stocks, 
-                             key=lambda x: (-x["value_score"], x["price_to_normal"]))[:count]
+        # 生成推薦訊息
+        message = "📊 股票推薦 (v2)\n\n"
+        for i, stock in enumerate(top_10, 1):
+            message += f"{i}. {stock['stock_id']}\n"
+            message += f"   現價: {stock['current_price']:.2f}\n"
+            message += f"   價值分數: {stock['value_score']:.2f}\n"
+            message += f"   ROE: {stock['roe']:.2f}%\n"
+            message += f"   股價/低點: {stock['price_to_low']:.2f}\n"
+            message += f"   本益比: {stock['current_per']:.2f}\n\n"
         
-        logger.info(f"最終推薦的股票數量：{len(sorted_stocks)}")
-        logger.info(f"推薦的股票列表：{[stock['stock_id'] for stock in sorted_stocks]}")
+        await update.message.reply_text(message)
         
-        message = f"📊 **推薦股票 V2 版本（前 {count} 名）**\n\n"
-        for stock in sorted_stocks:
-            message += (
-                f"🔹 **{stock['stock_id']}**\n"
-                f"   💰 **目前股價**: {stock['目前股價']:.2f} 元\n"
-                f"   📊 **ROE**: {stock['ROE']:.2f}%\n"
-                f"   📊 **ROE趨勢**: {stock['roe_trend']}\n"
-                f"   📊 **ROE波動**: {stock['roe_decline_ratio']:.2f}%\n"
-                f"   💵 **推估EPS**: {stock['推估EPS']:.2f}\n"
-                f"   📉 **低股價**: {stock['低股價']:.2f} 元\n"
-                f"   📊 **正常股價**: {stock['正常股價']:.2f} 元\n"
-                f"   📈 **高股價**: {stock['高股價']:.2f} 元\n"
-                f"   ⭐ **投資價值分數**: {stock['value_score']}\n"
-                "--------------------\n"
-            )
-        
-        await update.message.reply_text(message, parse_mode="Markdown")
-        
-    finally:
-        # 重置執行狀態
-        is_processing = False
-        should_cancel = False
-        current_task = None
+    except Exception as e:
+        logger.error(f"推薦股票時發生錯誤: {str(e)}")
+        await update.message.reply_text("處理過程中發生錯誤，請稍後再試")
 
 def main():
     global app
