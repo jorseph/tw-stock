@@ -121,17 +121,18 @@ async def stock_estimate(update: Update, context: CallbackContext) -> None:
         return
 
     stock_id = context.args[0]
-    df_result = await calculate_quarterly_stock_estimates(stock_id)
+    df_result, now_price = await calculate_quarterly_stock_estimates(stock_id)
 
     if df_result is None:
         await update.message.reply_text(f"⚠️ 無法獲取 {stock_id} 的數據，請檢查 API 設定或股票代號")
         return
 
     # 取最近 4 季數據
-    df_result = df_result.tail(4)
+    df_result = df_result.head(4)
 
     # 生成回應訊息
     message = f"📊 **{stock_id} 季度 ROE & 推估股價** 📊\n"
+    message += f"\n🔹 **當前股價**: {now_price:.2f} 元\n"
     for _, row in df_result.iterrows():
         message += (
             f"\n📅 **季度**: {row['quarter']}"
@@ -370,7 +371,7 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
             return None
 
         # 確保日期格式正確
-        df["date"] = pd.to_datetime(df["date"], errors="coerce", infer_datetime_format=True)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
         
         # 確保數值欄位為數值類型
         numeric_columns = ["PER", "PBR"]
@@ -384,18 +385,9 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
             (df['PBR'] > 0) & (df['PBR'] < 10)     # 合理的 PBR 範圍
         ]
 
-        logger.info(f"股票 {stock_id} 過濾後數據筆數: {len(df)}")
-
         if df.empty:
             logger.warning(f"股票 {stock_id} 沒有有效的 PER 和 PBR 數據")
             return None
-
-        # 計算 ROE (%)
-        df["ROE"] = np.where(
-            (df['PER'] != 0) & (df['PER'].notna()) & (df['PBR'].notna()),
-            (df['PBR'] / df['PER']) * 100,
-            np.nan
-        )
 
         # 依季度取數據
         df["quarter"] = df["date"].dt.to_period("Q")
@@ -412,31 +404,37 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
             date=("date", "last"),
             PER=("PER", "mean"),
             PBR=("PBR", "median"),
-            ROE=("ROE", "median")
+            close=("close", "last")
         ).reset_index()
 
         # 合併 PER 統計數據
         df_quarterly = df_quarterly.merge(df_per_stats, on="quarter", how="left")
 
-        # ★★★【MODIFIED】★★★
-        # 根據每個季度的最後日期從 API 查詢當天收盤價，作為 prev_close
+        # 計算季度 ROE (%)
+        df_quarterly["ROE"] = np.where(
+            (df_quarterly['PER'] != 0) & (df_quarterly['PER'].notna()) & (df_quarterly['PBR'].notna()),
+            (df_quarterly['PBR'] / df_quarterly['PER']) * 100,
+            np.nan
+        )
+
+        # 根據每個季度的最後日期從 CSV 中獲取當天收盤價，作為 prev_close
         prev_closes = []
         for _, row in df_quarterly.iterrows():
             quarter_end_date = row["date"]  # 該季度最後一天的日期
-            price = await get_stock_price_on_date(stock_id, quarter_end_date)
-            if price is None:
-                logger.warning(f"無法獲取股票 {stock_id} 在 {quarter_end_date.strftime('%Y-%m-%d')} 的收盤價")
-                price = np.nan  # 如果無法獲取，記為 nan
+            # 從原始數據中獲取該日期的收盤價
+            price = df[df["date"] == quarter_end_date]["close"].iloc[0] if not df[df["date"] == quarter_end_date].empty else np.nan
+            if price is None or price == 0:
+                logger.warning(f"股票 {stock_id} 在 {quarter_end_date.strftime('%Y-%m-%d')} 的收盤價無效")
+                price = np.nan
             prev_closes.append(price)
         df_quarterly["prev_close"] = prev_closes
 
-        # 新增檢查：如果 prev_close 為 0 或 NaN，則過濾掉這些行（或根據需求設定備用值）
+        # 新增檢查：如果 prev_close 為 0 或 NaN，則過濾掉這些行
         invalid_count = df_quarterly[(df_quarterly["prev_close"] == 0) | (df_quarterly["prev_close"].isna())].shape[0]
         if invalid_count > 0:
             logger.warning(f"股票 {stock_id} 有 {invalid_count} 行季度數據的 prev_close 為 0 或無效，將過濾掉這些數據")
             return None
         df_quarterly = df_quarterly[(df_quarterly["prev_close"] != 0) & (df_quarterly["prev_close"].notna())]
-        # ★★★【END MODIFIED】★★★
 
         df_quarterly["BVPS"] = df_quarterly["prev_close"] / df_quarterly["PBR"]
 
@@ -461,8 +459,8 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
             return None
 
         # 檢查是否有足夠的季度數據
-        if len(df_quarterly) < 4:
-            logger.warning(f"股票 {stock_id} 的季度數據不足 4 季")
+        if len(df_quarterly) < 16:
+            logger.warning(f"股票 {stock_id} 的季度數據不足 4 年")
             return None
 
         # 檢查最新數據是否在最近一年內
@@ -480,9 +478,10 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
         # 生成所有應該有的季度
         all_quarters = pd.period_range(start=start_date, end=end_date, freq='Q')
         
-        # 檢查是否所有季度都有數據
+        # 檢查是否所有季度都有數據（除了當季）
         existing_quarters = set(df_quarterly['quarter'])
-        missing_quarters = [q for q in all_quarters if q not in existing_quarters]
+        current_quarter = pd.Timestamp.now().to_period('Q')
+        missing_quarters = [q for q in all_quarters if q not in existing_quarters and q < current_quarter]
         
         if missing_quarters:
             logger.warning(f"股票 {stock_id} 缺少以下季度的數據: {missing_quarters}")
@@ -530,7 +529,8 @@ async def calculate_quarterly_stock_estimates(stock_id, start_date="2020-01-01",
         except Exception as e:
             logger.error(f"寫入 CSV 文件時發生錯誤: {str(e)}")
 
-        return df_quarterly
+        # 返回計算結果和當前股價
+        return df_quarterly, price
 
     except Exception as e:
         logger.error(f"處理股票 {stock_id} 數據時發生錯誤: {str(e)}")
@@ -656,7 +656,7 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
         logger.info(f"成功讀取股價數據，共 {len(stock_prices)} 支股票")
 
         # 獲取所有股票代碼
-        stock_list = list(stock_prices.keys())[:300]
+        stock_list = list(stock_prices.keys())
         logger.info(f"開始處理股票，總共 {len(stock_list)} 支股票")
 
         # 處理每支股票
@@ -674,13 +674,14 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                 
             try:
                 # 使用 calculate_quarterly_stock_estimates 獲取季度數據
-                df_quarterly = await calculate_quarterly_stock_estimates(stock_id)
+                df_quarterly, now_price = await calculate_quarterly_stock_estimates(stock_id)
                 if df_quarterly is None or df_quarterly.empty:
                     no_quarter_data_count += 1
                     continue
 
                 # 取得該股票最新季度數據
                 if df_quarterly.iloc[0]['ROE'] < 15:
+                    logger.info(f"股票 {stock_id} 的 ROE 為 {df_quarterly.iloc[0]['ROE']}，不符合 ROE 15% 以下的條件")
                     continue
 
 
@@ -695,15 +696,17 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                 
                 # 2. 計算 PER 的折扣程度（越低越好）
                 per_discount = 1 / df_quarterly.iloc[0]['PER']
-
-                if df_quarterly.iloc[0]['PER'] < 15:
-                    continue
                 
                 # 3. 綜合計算價值分數（考慮股價折扣和 PER 折扣）
                 value_score = (price_discount * 0.6 + per_discount * 0.4) * 100
                 
                 # 確保分數在合理範圍內
                 value_score = max(0, min(100, value_score))
+
+                # value_score <= 0 不推薦
+                if value_score <= 0:
+                    logger.info(f"股票 {stock_id} 的價值分數為 {value_score}，不符合價值分數 30 以上的條件")
+                    continue
                 
                 result = {
                     "stock_id": stock_id,
@@ -827,7 +830,7 @@ async def get_stock_roe_data(update: Update, context: CallbackContext) -> None:
 
         # 获取需要处理的股票列表（排除已有数据的股票）
         missing_stocks = [stock_id for stock_id in stock_list 
-                        if stock_id not in existing_stocks]
+                        if stock_id not in existing_stocks and stock_id not in no_data_stocks]
         logger.info(f"其中 {len(missing_stocks)} 支股票需要處理")
 
         if not missing_stocks:
