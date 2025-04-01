@@ -127,24 +127,31 @@ async def stock_estimate(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(f"⚠️ 無法獲取 {stock_id} 的數據，請檢查 API 設定或股票代號")
         return
 
-    # 取最近 4 季數據
-    df_result = df_result.head(4)
+    # 計算統計數據的平均值
+    avg_roe = df_result['ROE'].mean()
+    avg_per_high = df_result['PER_最高值'].mean()
+    avg_per_normal = df_result['PER_平均值'].mean()
+    avg_per_low = df_result['PER_最低值'].mean()
+
+    # 使用最新一筆的 BVPS 和平均 ROE 計算推估 EPS
+    latest_bvps = df_result.iloc[0]['BVPS']  # 最新一筆的 BVPS
+    estimated_eps = latest_bvps * (avg_roe / 100)  # 使用平均 ROE 計算
+
+    # 使用推估 EPS 和平均 PER 計算股價區間
+    low_price = estimated_eps * avg_per_low
+    normal_price = estimated_eps * avg_per_normal
+    high_price = estimated_eps * avg_per_high
 
     # 生成回應訊息
     message = f"📊 **{stock_id} 季度 ROE & 推估股價** 📊\n"
     message += f"\n🔹 **當前股價**: {now_price:.2f} 元\n"
-    for _, row in df_result.iterrows():
-        message += (
-            f"\n📅 **季度**: {row['quarter']}"
-            f"\n📊 **ROE**: {row['ROE']:.2f}%"
-            f"\n🏦 **BVPS**: {row['BVPS']:.2f} 元"
-            f"\n💰 **推估EPS**: {row['推估EPS']:.2f} 元"
-            f"\n📈 **PER 區間**: {row['PER_最低值']:.2f} ~ {row['PER_最高值']:.2f}"
-            f"\n📉 **低股價**: {row['低股價']:.2f} 元"
-            f"\n📊 **正常股價**: {row['正常股價']:.2f} 元"
-            f"\n📈 **高股價**: {row['高股價']:.2f} 元"
-            f"\n--------------------"
-        )
+    
+    # 添加統計數據
+    message += f"\n📈 **統計數據（近20季平均）**:\n"
+    message += f"📊 **平均 ROE**: {avg_roe:.2f}%\n"
+    message += f"📈 **平均 PER 區間**: {avg_per_low:.2f} ~ {avg_per_normal:.2f} ~ {avg_per_high:.2f}\n"
+    message += f"💰 **推估EPS**: {estimated_eps:.2f} 元 (使用最新 BVPS: {latest_bvps:.2f} × 平均 ROE: {avg_roe:.2f}%)\n"
+    message += f"📉 **推估股價區間**: {low_price:.2f} ~ {normal_price:.2f} ~ {high_price:.2f} 元\n"
 
     await update.message.reply_text(message, parse_mode="Markdown")
 
@@ -679,9 +686,24 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                     no_quarter_data_count += 1
                     continue
 
+                    # 計算統計數據的平均值
+                avg_roe = df_quarterly['ROE'].mean()
+                avg_per_high = df_quarterly['PER_最高值'].mean()
+                avg_per_normal = df_quarterly['PER_平均值'].mean()
+                avg_per_low = df_quarterly['PER_最低值'].mean()
+
+                # 使用最新一筆的 BVPS 和平均 ROE 計算推估 EPS
+                latest_bvps = df_quarterly.iloc[0]['BVPS']  # 最新一筆的 BVPS
+                estimated_eps = latest_bvps * (avg_roe / 100)  # 使用平均 ROE 計算
+
+                # 使用推估 EPS 和平均 PER 計算股價區間
+                low_price = estimated_eps * avg_per_low
+                normal_price = estimated_eps * avg_per_normal
+                high_price = estimated_eps * avg_per_high
+
                 # 取得該股票最新季度數據
-                if df_quarterly.iloc[0]['ROE'] < 15:
-                    logger.info(f"股票 {stock_id} 的 ROE 為 {df_quarterly.iloc[0]['ROE']}，不符合 ROE 15% 以下的條件")
+                if avg_roe < 15:
+                    logger.info(f"股票 {stock_id} 的 ROE 為 {avg_roe}，不符合 ROE 15% 以下的條件")
                     continue
 
 
@@ -692,7 +714,7 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
 
                 # 計算價值分數
                 # 1. 計算股價相對低價的折扣程度（越低越好）
-                price_discount = (df_quarterly.iloc[0]['低股價'] - current_price) / df_quarterly.iloc[0]['低股價']
+                price_discount = (low_price - current_price) / low_price
                 
                 # 2. 計算 PER 的折扣程度（越低越好）
                 per_discount = 1 / df_quarterly.iloc[0]['PER']
@@ -717,10 +739,10 @@ async def recommend_v2(update: Update, context: CallbackContext) -> None:
                     "current_per": df_quarterly.iloc[0]['PER'],
                     "roe_trend": True,  # calculate_quarterly_stock_estimates 已經確保了 ROE 趨勢
                     "roe_volatility": 0,  # 這裡可以根據需要計算波動率
-                    "低股價": df_quarterly.iloc[0]['低股價'],
-                    "正常股價": df_quarterly.iloc[0]['正常股價'],
-                    "高股價": df_quarterly.iloc[0]['高股價'],
-                    "推估EPS": df_quarterly.iloc[0]['推估EPS']
+                    "低股價": low_price,
+                    "正常股價": normal_price,
+                    "高股價": high_price,
+                    "推估EPS": estimated_eps
                 }
                 
                 all_results.append(result)
