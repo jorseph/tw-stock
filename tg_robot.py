@@ -974,6 +974,7 @@ async def update_csv_with_close(update: Update, context: CallbackContext) -> Non
     讀取 stock_roe_data.csv，對於每一個唯一的 (stock_id, date) 組合，
     呼叫 API 獲取該日的收盤價 (close)，
     並將結果合併進 CSV（依據 stock_id 與 date 匹配），更新後存回 CSV 文件。
+    同時更新 stock_prices.json 中的最新價格。
     """
     csv_file = "stock_roe_data.csv"
     if not os.path.exists(csv_file):
@@ -998,6 +999,9 @@ async def update_csv_with_close(update: Update, context: CallbackContext) -> Non
     
     # 建立一個列表來存放所有收盤價資料
     all_price_dfs = []
+    
+    # 用於更新 stock_prices.json 的最新價格
+    latest_prices = {}
 
     # 取得df中的第一筆資料的date
     query_date = df["date"].iloc[0]
@@ -1016,6 +1020,11 @@ async def update_csv_with_close(update: Update, context: CallbackContext) -> Non
                 # 確保 price_df 的 stock_id 也是字串類型
                 price_df["stock_id"] = price_df["stock_id"].astype(str)
                 all_price_dfs.append(price_df)
+                
+                # 獲取最新價格並更新到 latest_prices
+                latest_price = price_df.sort_values("date").iloc[-1]["close"]
+                if latest_price > 0:  # 確保價格有效
+                    latest_prices[stock_id] = latest_price
                 
             # 適當延遲，避免 API 請求過快
             await asyncio.sleep(0.1)
@@ -1046,6 +1055,19 @@ async def update_csv_with_close(update: Update, context: CallbackContext) -> Non
     df_updated.to_csv(csv_file, index=False, encoding='utf-8-sig')
     logger.info(f"已將收盤價數據更新並合併到 {csv_file} 文件中")
 
+    # 更新 stock_prices.json
+    if latest_prices:
+        with open(STOCK_PRICE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(latest_prices, f, ensure_ascii=False, indent=2)
+        logger.info(f"已更新 {len(latest_prices)} 支股票的最新價格到 stock_prices.json")
+
+    # 發送完成訊息
+    await update.message.reply_text(
+        f"股票價格更新完成！\n"
+        f"- 更新 {len(latest_prices)} 支股票的最新價格\n"
+        f"- 更新 {len(all_price_dfs)} 支股票的歷史收盤價"
+    )
+
 
 def main():
     global app
@@ -1067,8 +1089,6 @@ def main():
         app.add_handler(CommandHandler("cancel_recommend", cancel_recommend))
         app.add_handler(CommandHandler("etf", etf))
         app.add_handler(CommandHandler("stock_estimate", stock_estimate))
-        app.add_handler(CommandHandler("sync_stock_prices", sync_stock_prices))
-
         app.add_handler(CommandHandler("update_csv_with_close", update_csv_with_close))
 
         logger.info("Bot 已啟動並開始運行...")
