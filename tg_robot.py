@@ -1112,6 +1112,7 @@ def main():
         app.add_handler(CommandHandler("etf", etf))
         app.add_handler(CommandHandler("stock_estimate", stock_estimate))
         app.add_handler(CommandHandler("update_csv_with_close", update_csv_with_close))
+        app.add_handler(CommandHandler("sync_stock_prices", sync_stock_prices))
 
         logger.info("Bot 已啟動並開始運行...")
         app.run_polling()
